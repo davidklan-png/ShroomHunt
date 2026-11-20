@@ -6,7 +6,7 @@
               coordinates and uncertainty. Format SIMPLE_CSV.
   mushroomobserver  Mushroom Observer's complete dataset as published to GBIF (DOI 10.15468/wwcmna), worldwide.
               Used to cross-reference: MO records are also inside 'japan', tagged by datasetKey.
-  neighbours  Species list of fungi recorded in China, both Koreas, Taiwan and Russia, used to flag
+  neighbours  Species list of fungi recorded in mainland East Asia, Korea, Taiwan and the Russian Far East, to flag
               species known next door but never recorded in Japan. Format SPECIES_LIST.
 
 Needs a free GBIF account. From the ShroomHunt folder:
@@ -23,8 +23,11 @@ REQUESTS = {
     "japan": ("SIMPLE_CSV", {"type": "and", "predicates": [FUNGI, {"type": "equals", "key": "COUNTRY", "value": "JP"}]}),
     "mushroomobserver": ("SIMPLE_CSV", {"type": "equals", "key": "DATASET_KEY",
                          "value": "d714382d-5890-4234-ae81-696eeb53658a"}),
+    # East Asia box (lon 100-155E, lat 18-56N) minus Japan: China east of 100E, Koreas, Taiwan, Russian Far East
+    # (Primorye, Amur, Khabarovsk, Sakhalin, Kurils). A country filter on RU pulled in European Russia.
     "neighbours": ("SPECIES_LIST", {"type": "and", "predicates": [FUNGI,
-                   {"type": "in", "key": "COUNTRY", "values": ["CN", "KR", "KP", "TW", "RU"]}]}),
+                   {"type": "within", "geometry": "POLYGON((100 18,155 18,155 56,100 56,100 18))"},
+                   {"type": "not", "predicate": {"type": "equals", "key": "COUNTRY", "value": "JP"}}]}),
 }
 API = "https://api.gbif.org/v1/occurrence/download"
 
