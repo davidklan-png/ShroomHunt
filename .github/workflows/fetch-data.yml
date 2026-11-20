@@ -27,7 +27,8 @@ on:
 permissions:
   contents: write   # needed to create the Release that holds the data files
 
-concurrency: fetch-data
+# One slot per kind of download, so a quick Mushroom Observer fetch isn't stuck behind a long GBIF wait
+concurrency: fetch-data-${{ inputs.gbif }}-${{ inputs.mushroomobserver }}-${{ inputs.resume_key }}
 
 jobs:
   fetch:
