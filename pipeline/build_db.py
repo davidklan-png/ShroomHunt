@@ -4,7 +4,7 @@ Usage: python3 pipeline/build_db.py <japan.csv> <neighbours.csv> <mushroomobserv
 (the CSVs are inside the release zips). Needs: pip install duckdb"""
 import sys, duckdb
 jp, nb, mo = sys.argv[1:4]
-c = duckdb.connect("data/shroomhunt.duckdb")
+c = duckdb.connect(sys.argv[4] if len(sys.argv) > 4 else "data/shroomhunt.duckdb")
 r = lambda f: f"read_csv('{f}', delim='\\t', header=true, quote='', all_varchar=true, ignore_errors=true)"
 for t, f in (("jp", jp), ("nb", nb), ("mo", mo)):
     c.execute(f"create or replace table {t} as select * from {r(f)}")

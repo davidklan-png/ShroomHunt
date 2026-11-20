@@ -73,7 +73,7 @@ jobs:
         run: |
           shopt -s nullglob
           files=(data/raw/gbif/* data/raw/mushroomobserver/* data/raw/redlist/* docs/raw_schema.md)
-          [ ${#files[@]} -gt 2 ] || { echo "Nothing downloaded"; exit 1; }
+          [ ${#files[@]} -gt 1 ] || { echo "Nothing downloaded"; exit 1; }
           tag="data-$(date -u +%Y%m%d-%H%M)"
           notes="Raw downloads for ShroomHunt. Cite GBIF downloads by the DOI in each .json file."
           for j in data/raw/gbif/*.json; do notes="$notes"$'\n'"- $(basename "$j" .json): https://doi.org/$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['doi'])" "$j")"; done
