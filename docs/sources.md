@@ -4,7 +4,7 @@
 | Source | What it gives | Access | Verdict |
 |---|---|---|---|
 | **GBIF** (gbif.org) | Global hub: aggregates iNaturalist research-grade sightings, Mushroom Observer (check), national fungal databases, herbaria | Free account; SQL download API returns pre-counted tables; each download has a DOI for citation | **Primary source.** One query covers most of the sources below |
-| **Mushroom Observer** (mushroomobserver.org) | Community sightings with consensus votes on the species | Nightly CSV dumps (`observations/names/locations.csv`); API is NOT for bulk or AI use | Use the CSVs. Strong in North America. Check whether it's already in GBIF to avoid double counting |
+| **Mushroom Observer** (mushroomobserver.org) | Community sightings with consensus votes on the species | Nightly CSV dumps (`observations/names/locations.csv`); API is NOT for bulk or AI use | Use the CSVs. Strong in North America. **Also published to GBIF** (dataset d714382d-5890-4234-ae81-696eeb53658a, DOI 10.15468/wwcmna), so it's fetched from there. Its direct CSVs were unreachable from GitHub's runners on 2026-11-21 |
 | **iNaturalist Open Data** (AWS `s3://inaturalist-open-data`) | Monthly snapshot: observations, taxa | `aws s3 cp … --no-sign-request`, about 1.6 GB of observations | Only if GBIF's weekly research-grade feed isn't enough. Mostly redundant |
 | **MyCoPortal** (mycoportal.org) | 4M+ specimen records, mostly North American fungaria | Darwin Core archives per collection | Herbarium specimens skew to old records. Low priority |
 

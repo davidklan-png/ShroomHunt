@@ -4,6 +4,8 @@
   japan       Every fungus record GBIF holds for Japan, unfiltered: all ranks (incl. genus-only and
               'sp.' records), specimens, observations, DNA-derived records, with collector, voucher,
               coordinates and uncertainty. Format SIMPLE_CSV.
+  mushroomobserver  Mushroom Observer's complete dataset as published to GBIF (DOI 10.15468/wwcmna), worldwide.
+              Used to cross-reference: MO records are also inside 'japan', tagged by datasetKey.
   neighbours  Species list of fungi recorded in China, both Koreas, Taiwan and Russia, used to flag
               species known next door but never recorded in Japan. Format SPECIES_LIST.
 
@@ -19,6 +21,8 @@ import base64, json, os, sys, time, urllib.request, urllib.error
 FUNGI = {"type": "equals", "key": "TAXON_KEY", "value": "5"}
 REQUESTS = {
     "japan": ("SIMPLE_CSV", {"type": "and", "predicates": [FUNGI, {"type": "equals", "key": "COUNTRY", "value": "JP"}]}),
+    "mushroomobserver": ("SIMPLE_CSV", {"type": "equals", "key": "DATASET_KEY",
+                         "value": "d714382d-5890-4234-ae81-696eeb53658a"}),
     "neighbours": ("SPECIES_LIST", {"type": "and", "predicates": [FUNGI,
                    {"type": "in", "key": "COUNTRY", "values": ["CN", "KR", "KP", "TW", "RU"]}]}),
 }

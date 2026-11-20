@@ -11,13 +11,13 @@ on:
       gbif:
         description: "GBIF downloads to request"
         type: choice
-        options: [all, japan, neighbours, none]
+        options: [all, japan, neighbours, mushroomobserver, none]
         default: all
       resume_key:
         description: "Optional: an existing GBIF download key to collect instead of requesting a new one"
         required: false
       mushroomobserver:
-        description: "Also fetch Mushroom Observer CSVs"
+        description: "Also try the CSVs direct from mushroomobserver.org (their server refused GitHub on 2026-11-21; GBIF has the same data)"
         type: boolean
         default: false
   # Monthly refresh. Each run creates new GBIF downloads with new DOIs, so leave this off until the pipeline is stable.
