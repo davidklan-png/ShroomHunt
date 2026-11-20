@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Forage Season Finder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Alegreya:wght@500;700&family=Alegreya+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* VOICE: careful field naturalist — generous, but never casual about poison
+   IDEA: a pocket field guide with a fruiting calendar printed on the inside cover
+   PICTURE: the live fruiting calendar — species rows × 12 months, this month lit
+   COLOUR and TYPE: forest moss band, white page, chanterelle gold accent, warning red; Alegreya + Alegreya Sans
+   LAYOUT: moss header with location controls → calendar → species cards → deadly species → ask-for-any-city */
+:root{color-scheme:light dark;--bg:light-dark(#ffffff,#0f1410);--ink:light-dark(#1b2418,#e6ece0);--soft:light-dark(#5b6656,#a3ae9c);--moss:light-dark(#2f4a24,#1c2e16);--mossink:#f1f5ea;--line:light-dark(#dfe5d8,#2a3426);--card:light-dark(#f6f8f2,#161d14);--gold:#e39a1b;--goldsoft:light-dark(#fbeccc,#3a2a0c);--red:light-dark(#b3202a,#ff6b6b);--redsoft:light-dark(#fbe3e3,#3a1414);--amber:light-dark(#8a5a00,#f0b84a)}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.55 "Alegreya Sans",system-ui,sans-serif;overflow-x:clip}
+h1,h2,h3{font-family:Alegreya,Georgia,serif;line-height:1.05;text-wrap:balance;margin:0}
+h1{font-size:clamp(32px,5vw,50px)}h2{font-size:clamp(26px,3.4vw,34px);margin-bottom:6px}h3{font-size:21px}
+.band{padding:clamp(28px,4vw,56px) max(5vw,16px)}.wrap{max-width:1240px;margin:0 auto}
+header.band{background:var(--moss);color:var(--mossink);padding-bottom:28px}
+header p{max-width:62ch;margin:10px 0 22px;color:#d3dccb}
+.ctl{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1.2fr) minmax(0,1fr) auto;gap:12px;align-items:end}
+label{display:block;font-size:14px;font-weight:500;margin-bottom:4px;color:#d3dccb}
+select,input{width:100%;font:16px "Alegreya Sans",sans-serif;min-height:46px;padding:8px 12px;border-radius:8px;border:1px solid #6c8560;background:#fff;color:#1b2418}
+button{font:500 16px "Alegreya Sans",sans-serif;min-height:46px;padding:8px 18px;border-radius:8px;border:0;background:var(--gold);color:#1b1404;cursor:pointer;white-space:nowrap}
+button:hover{filter:brightness(1.07)}button:disabled{opacity:.6;cursor:wait}
+:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+.warn{margin-top:20px;padding:12px 16px;border-radius:8px;background:rgba(0,0,0,.22);font-size:15px;color:#f1f5ea}
+.warn b{color:#ffd27a}
+.sum{display:flex;flex-wrap:wrap;gap:8px 28px;align-items:baseline;margin-bottom:14px}.sum .soft{color:var(--soft)}
+.cal{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.row{display:grid;grid-template-columns:minmax(120px,15em) repeat(12,minmax(0,1fr));align-items:center;border-top:1px solid var(--line);min-height:34px}
+.row:first-child{border-top:0}.row.hd{background:var(--card);font-size:13px;color:var(--soft);min-height:30px}
+.row .nm{padding:4px 10px;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .c{height:100%;display:flex;align-items:center;justify-content:center;border-left:1px solid var(--line)}
+.row .c.now{background:var(--goldsoft)}.row.hd .c.now{color:var(--ink);font-weight:700}
+.row .c i{display:block;height:14px;width:100%;background:#7c9a5c}
+.row.tox .c i{background:var(--red)}.row .c i.l{border-radius:7px 0 0 7px;margin-left:3px}.row .c i.r{border-radius:0 7px 7px 0;margin-right:3px}.row .c i.l.r{border-radius:7px}
+.key{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:14px;color:var(--soft);margin-top:10px}.key span::before{content:"";display:inline-block;width:18px;height:10px;border-radius:5px;margin-right:6px;vertical-align:middle;background:var(--k)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,330px),1fr));gap:16px;margin-top:16px}
+.sp{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;display:flex;flex-direction:column;gap:6px}
+.sp .lat{font-style:italic;color:var(--soft);font-size:15px}
+.tag{display:inline-block;font-size:13px;font-weight:700;padding:2px 9px;border-radius:20px;margin-right:6px}
+.t-E{background:#dcebc9;color:#29431c}.t-C{background:var(--goldsoft);color:var(--amber)}.t-X{background:var(--redsoft);color:var(--red)}.t-AI{background:var(--line);color:var(--ink)}
+.sp p{margin:0;font-size:15.5px}.sp .lk{border-left:3px solid var(--red);padding-left:10px}.sp .lk b{color:var(--red)}
+.sp a{color:inherit;font-size:14px;margin-top:auto}
+.empty{color:var(--soft);padding:18px;border:1px dashed var(--line);border-radius:10px}
+.danger{background:var(--redsoft)}.danger .sp{background:var(--bg)}
+.ai{border-top:1px solid var(--line)}.ai .note{max-width:70ch;color:var(--soft)}
+.status{margin-top:12px;color:var(--soft)}.ai .box{margin-top:14px;padding:14px 16px;border-radius:8px;background:var(--card);border:1px solid var(--line)}
+footer{font-size:14px;color:var(--soft)}
+@media(max-width:860px){.ctl{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.ctl .go{grid-column:1/-1}}
+@media(max-width:600px){.ctl{grid-template-columns:minmax(0,1fr)}.row{grid-template-columns:minmax(96px,8.5em) repeat(12,minmax(0,1fr))}.row .nm{font-size:13px;padding:4px 6px}.row.hd .c{font-size:11px}}
+@media(prefers-reduced-motion:no-preference){.sp{animation:up .35s ease both}@keyframes up{from{opacity:0;transform:translateY(6px)}}}
+</style></head><body>
+<header class="band"><div class="wrap">
+<h1>What's fruiting near you</h1>
+<p>Choose a country and a month to see which edible mushrooms are usually in season, the deadly species growing at the same time, and the lookalikes to rule out. Type a city to get a local list for anywhere.</p>
+<form class="ctl" id="f">
+<div><label for="country">Country</label><select id="country"></select></div>
+<div><label for="city">City or area (optional)</label><input id="city" placeholder="e.g. Tokyo, Nagano, Portland" autocomplete="off"></div>
+<div><label for="month">Month</label><select id="month"></select></div>
+<div class="go"><button type="submit" id="go">Show the season</button></div>
+</form>
+<div class="warn"><b>Never eat a wild mushroom identified only by an app, photo or AI.</b> Several deadly species look almost the same as the edible ones listed here. Have each find confirmed in person by a local expert or mycological society, and check whether picking is allowed where you are.</div>
+</div></header>
+
+<main>
+<section class="band"><div class="wrap">
+<div class="sum"><h2 id="where">This season</h2><span class="soft" id="hemi"></span></div>
+<div class="cal" id="cal"></div>
+<div class="key"><span style="--k:#7c9a5c">Edible species fruiting</span><span style="--k:var(--red)">Toxic or deadly species fruiting</span><span style="--k:var(--goldsoft)">Selected month</span></div>
+</div></section>
+
+<section class="band" style="padding-top:0"><div class="wrap">
+<h2>Edible species in season</h2><div class="soft" id="ecount" style="color:var(--soft)"></div>
+<div class="grid" id="edible"></div>
+</div></section>
+
+<section class="band danger"><div class="wrap">
+<h2>Dangerous species out at the same time</h2>
+<div style="color:var(--soft)">Learn these before picking anything. Most foraging deaths come from mistaking one of them for an edible species.</div>
+<div class="grid" id="toxic"></div>
+</div></section>
+
+<section class="band ai"><div class="wrap">
+<h2 id="aih">A local list for any city</h2>
+<p class="note">The built-in guide covers about 40 well-documented species by region. To get local names, habitats, rules and species specific to one city, ask Claude. Treat the answer as a research starting point, not an identification.</p>
+<button id="ask" type="button">Ask Claude about this place</button>
+<div class="status" id="st" aria-live="polite"></div>
+<div id="aiout"></div>
+</div></section>
+</main>
+<footer class="band" style="padding-top:0"><div class="wrap">Seasons are typical for temperate areas and shift with altitude, rainfall and the year's weather. Southern-hemisphere months are mirrored from northern data, which is approximate. In the tropics, most fruiting follows the rains rather than the calendar. Built-in guide compiled November 2026.</div></footer>
+
+<script>
+{
+const MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const RN={na:'North America',eu:'Europe',ea:'East Asia',oc:'Australia & NZ',sa:'South America',af:'Africa',sas:'South & Southeast Asia'};
+// [name, region, hemisphere, tropical]
+const C=[['Japan','ea','N'],['South Korea','ea','N'],['China','ea','N'],['Taiwan','ea','N'],['United States','na','N'],['Canada','na','N'],['Mexico','na','N'],
+['United Kingdom','eu','N'],['Ireland','eu','N'],['France','eu','N'],['Germany','eu','N'],['Italy','eu','N'],['Spain','eu','N'],['Portugal','eu','N'],['Netherlands','eu','N'],['Belgium','eu','N'],['Switzerland','eu','N'],['Austria','eu','N'],['Poland','eu','N'],['Czechia','eu','N'],['Slovakia','eu','N'],['Hungary','eu','N'],['Slovenia','eu','N'],['Croatia','eu','N'],['Romania','eu','N'],['Bulgaria','eu','N'],['Greece','eu','N'],['Turkey','eu','N'],['Ukraine','eu','N'],['Russia','eu','N'],['Sweden','eu','N'],['Norway','eu','N'],['Finland','eu','N'],['Denmark','eu','N'],['Estonia','eu','N'],['Latvia','eu','N'],['Lithuania','eu','N'],
+['Australia','oc','S'],['New Zealand','oc','S'],['Chile','sa','S'],['Argentina','sa','S'],['Uruguay','sa','S'],['Brazil','sa','S',1],['Colombia','sa','N',1],['Peru','sa','S',1],['Ecuador','sa','S',1],
+['South Africa','af','S'],['Kenya','af','S',1],['Tanzania','af','S',1],['Zambia','af','S',1],['Zimbabwe','af','S',1],['Malawi','af','S',1],['Nigeria','af','N',1],['Ghana','af','N',1],['Uganda','af','N',1],
+['India','sas','N',1],['Nepal','sas','N'],['Bhutan','sas','N'],['Pakistan','sas','N'],['Thailand','sas','N',1],['Vietnam','sas','N',1],['Laos','sas','N',1],['Philippines','sas','N',1],['Malaysia','sas','N',1],['Indonesia','sas','S',1],['Sri Lanka','sas','N',1]].sort((a,b)=>a[0].localeCompare(b[0]));
+const ALL=['na','eu','ea','oc','sa','af','sas'];
+// e: E choice edible, C edible with real caution, X toxic/deadly. m: northern-temperate months. w: follows the rains in the tropics
+const S=[
+{n:'Chanterelle',l:'Cantharellus cibarius group',r:['na','eu','ea'],m:[6,7,8,9,10],e:'E',h:'On soil under oak, beech, birch and conifers, often after summer rain.',k:'Jack-o’-lantern / tsukiyotake (Omphalotus) grows in clusters on wood with true gills; false chanterelle has thin, orange, forked gills.'},
+{n:'Porcini / cep',l:'Boletus edulis group',r:['na','eu','ea'],m:[7,8,9,10],e:'E',h:'Under spruce, pine, birch and oak; sponge pores instead of gills.',k:'Bitter bolete (pinkish pores, dark net on stem) ruins a dish; red-pored boletes that bruise blue can be toxic.'},
+{n:'Morel',l:'Morchella spp.',r:['na','eu','ea','sas'],m:[3,4,5],e:'C',h:'Spring, around dying elms, old orchards, burn sites and river woods. Himalayan morels in Nepal, India and Pakistan.',k:'False morel (Gyromitra) is deadly: brain-like, wrinkled cap and not hollow inside. Always slice true morels in half: they are fully hollow. Never eat raw.'},
+{n:'Hen of the woods / maitake',l:'Grifola frondosa',r:['na','eu','ea'],m:[9,10,11],e:'E',h:'Large rosettes at the base of old oaks.',k:'Black-staining polypore is similar but harmless; low-risk if it grows from oak and is fresh.'},
+{n:'Chicken of the woods',l:'Laetiporus spp.',r:['na','eu','ea'],m:[5,6,7,8,9,10],e:'C',h:'Bright orange-yellow shelves on oak, cherry and willow.',k:'Specimens on yew, eucalyptus or conifers have caused illness. Cook well and try a small amount first.'},
+{n:'Oyster mushroom',l:'Pleurotus ostreatus / pulmonarius',r:ALL,m:[1,2,3,10,11,12],e:'E',h:'Shelving clusters on dead hardwood; the winter oyster likes cold snaps.',k:'Tsukiyotake (Omphalotus japonicus) in Japan glows and has a dark stain at the stem base, and is Japan’s most common poisoning. Angel wings (sugihiratake) on conifer stumps has killed people. In Australia, ghost fungus is toxic.'},
+{n:'Lion’s mane',l:'Hericium erinaceus',r:['na','eu','ea'],m:[8,9,10,11],e:'E',h:'White icicle-like clumps on wounded hardwood trees.',k:'Few dangerous lookalikes. Related Hericium species are also edible.'},
+{n:'Shaggy mane / ink cap',l:'Coprinus comatus',r:ALL,m:[4,5,9,10,11],e:'E',h:'Lawns, roadsides and disturbed ground. Eat within hours because it dissolves into ink.',k:'Common ink cap (Coprinopsis atramentaria) causes a severe reaction with alcohol taken within days of eating it.'},
+{n:'Giant puffball',l:'Calvatia gigantea',r:['na','eu'],m:[7,8,9,10],e:'E',h:'Pastures and field edges; white ball the size of a melon.',k:'Slice every puffball top to bottom. Any outline of a cap and gills inside means a deadly Amanita button. Earthballs are firm and purple-black inside.'},
+{n:'Matsutake',l:'Tricholoma matsutake / murrillianum',r:['ea','eu','na'],m:[9,10,11],e:'E',h:'Under red pine in Japan and Korea, and in Scandinavian pine forest and the Pacific Northwest. Spicy-cinnamon smell. Japanese matsutake hills are usually leased, so picking there without permission is theft.',k:'Amanita smithiana (Pacific Northwest) causes kidney failure. Check for a bulb, a sac at the stem base and the absence of the matsutake smell.'},
+{n:'Wild shiitake',l:'Lentinula edodes',r:['ea'],m:[3,4,5,9,10,11],e:'E',h:'On fallen konara oak and chinquapin logs in spring and autumn.',k:'Tsukiyotake grows on similar wood: dark stain inside the stem base and glowing gills.'},
+{n:'Velvet shank / wild enoki',l:'Flammulina velutipes',r:['na','eu','ea'],m:[11,12,1,2,3],e:'C',h:'Winter clusters of orange caps with velvety dark stems on hardwood stumps.',k:'Funeral bell (Galerina marginata) is deadly and grows on the same stumps. Take a spore print every time: rusty brown means Galerina, white means enoki.'},
+{n:'Nameko',l:'Pholiota microspora',r:['ea'],m:[10,11],e:'C',h:'Slimy orange caps on beech and oak stumps in Japanese mountains.',k:'Funeral bell (Galerina) on the same wood is deadly. Beginners should not pick small brown mushrooms on wood.'},
+{n:'Honey fungus',l:'Armillaria mellea group',r:['na','eu','ea','oc','af'],m:[9,10,11],e:'C',h:'Big clusters at tree bases. Must be cooked thoroughly, and some people react even then.',k:'Funeral bell (Galerina) and sulphur tuft (Hypholoma) form similar clusters. Honey fungus has a white spore print and a ring.'},
+{n:'Wood blewit',l:'Lepista nuda',r:['na','eu','oc'],m:[9,10,11,12],e:'C',h:'Lilac mushrooms in leaf litter and compost, late in the season.',k:'Violet webcaps (Cortinarius) have rusty-brown spores and a cobweb veil, and some kill. Blewit spores are pale pink.'},
+{n:'Field mushroom',l:'Agaricus campestris',r:ALL,m:[6,7,8,9,10],e:'C',h:'Grazed meadows after warm rain; pink gills turning chocolate brown.',k:'Destroying angel (white gills, sac at the base) is deadly. Yellow stainer turns chrome yellow at the stem base and smells of ink.'},
+{n:'Parasol',l:'Macrolepiota procera',r:['na','eu','af','ea'],m:[7,8,9,10],e:'C',h:'Tall, snakeskin-patterned stem with a movable ring; grassland and woodland edges.',k:'Green-spored parasol (Chlorophyllum molybdites) is the most common cause of mushroom poisoning in North America and is spreading in Japan. Small Lepiota species are deadly. Take a spore print: green means don’t eat.'},
+{n:'Saffron milk cap',l:'Lactarius deliciosus',r:['eu','oc','sa','af','na'],m:[9,10,11,12],e:'E',h:'Under pine, including introduced pine plantations in Australia, NZ, Chile and South Africa. Bleeds carrot-orange milk.',k:'Woolly milk cap and other milk caps with white milk are toxic. Edible ones bleed orange and slowly turn green.'},
+{n:'Slippery jack',l:'Suillus luteus',r:['eu','na','oc','sa','af'],m:[9,10,11],e:'C',h:'Slimy brown cap under pine; common in southern-hemisphere pine plantations. Peel the cap.',k:'Few dangerous lookalikes, but it upsets some stomachs. Discard soggy or old specimens.'},
+{n:'Hedgehog mushroom',l:'Hydnum repandum',r:['na','eu','ea'],m:[8,9,10,11],e:'E',h:'Teeth instead of gills under the cap; mixed woods.',k:'One of the safest beginner species: few lookalikes have spines.'},
+{n:'Black trumpet',l:'Craterellus cornucopioides',r:['na','eu','ea'],m:[7,8,9,10],e:'E',h:'Hollow dark funnels in moss under beech and oak; hard to spot.',k:'Low risk. Make sure it is hollow and has no gills.'},
+{n:'Winter chanterelle / yellowfoot',l:'Craterellus tubaeformis',r:['na','eu'],m:[9,10,11,12],e:'E',h:'Mossy conifer forests late in the season, in large troops.',k:'Small brown gilled mushrooms nearby can be deadly. Check the hollow yellow stem and blunt false gills.'},
+{n:'Wood ear',l:'Auricularia spp.',r:ALL,m:[3,4,5,6,7,8,9,10,11],w:1,e:'E',h:'Rubbery brown ears on dead elder and hardwood; fruits almost year-round in wet climates.',k:'Few dangerous lookalikes. Avoid specimens that are hard or brittle when wet.'},
+{n:'Termite mushroom',l:'Termitomyces spp.',r:['af','sas'],m:[6,7,8,9],w:1,e:'C',h:'Rises from termite mounds after the first heavy rains; prized across Africa and South/Southeast Asia.',k:'Deadly Amanitas and green-spored parasol fruit in the same season. Check the long rooting stem connected to the mound.'},
+{n:'Cauliflower mushroom',l:'Sparassis crispa',r:['na','eu','ea'],m:[8,9,10,11],e:'E',h:'Ruffled cream mass at the base of pines.',k:'Few lookalikes. Clean it well because it traps grit.'},
+{n:'Caesar’s mushroom / tamagotake',l:'Amanita caesarea group',r:['eu','na','ea'],m:[7,8,9,10],e:'C',h:'Orange cap rising out of a white egg-like sac; warm oak and pine woods.',k:'Experts only. It is an Amanita, and deadly relatives look like it at the egg stage. Never eat one picked as an unopened egg.'},
+{n:'Black truffle',l:'Tuber melanosporum',r:['eu'],m:[12,1,2,3],e:'E',h:'Underground with oak and hazel in southern Europe; found with dogs. Usually on private or licensed land.',k:'Low risk. Chinese truffles are sometimes sold as fakes.'},
+{n:'St George’s mushroom',l:'Calocybe gambosa',r:['eu'],m:[4,5],e:'C',h:'Rings in spring grassland and hedgerows; mealy smell.',k:'Deadly fibrecap (Inocybe erubescens) and the livid pinkgill fruit at the same time and place.'},
+{n:'Lobster mushroom',l:'Hypomyces lactifluorum',r:['na'],m:[7,8,9,10],e:'C',h:'Bright orange crust parasitising milk caps in North American forests.',k:'Discard soft or decaying specimens. The host underneath can’t be identified.'},
+// toxic & deadly
+{n:'Death cap',l:'Amanita phalloides',r:['eu','na','oc','sa','af'],m:[7,8,9,10,11],e:'X',h:'With oak and other hardwoods; introduced to California, Canberra and Melbourne, Chile and South Africa.',k:'Causes most mushroom deaths worldwide. Greenish cap, white gills, a ring and a cup-shaped sac at the base. Symptoms appear 6–24 hours later, after the liver damage has begun.'},
+{n:'Destroying angel / dokutsurutake',l:'Amanita virosa / bisporigera',r:['eu','na','ea'],m:[6,7,8,9,10],e:'X',h:'Pure white Amanita in woodland.',k:'Mistaken for field mushrooms, puffball buttons and white edibles. One cap can kill.'},
+{n:'Funeral bell',l:'Galerina marginata',r:['na','eu','ea','oc'],m:[4,5,9,10,11,12],e:'X',h:'Small brown caps on rotting wood.',k:'Contains the same toxins as the death cap. Confused with enoki, honey fungus and nameko.'},
+{n:'Deadly webcap',l:'Cortinarius rubellus / orellanus',r:['eu','na'],m:[8,9,10],e:'X',h:'Orange-brown caps in conifer and mixed woods.',k:'Destroys the kidneys. Symptoms can take 2–20 days, so the link is often missed.'},
+{n:'False morel',l:'Gyromitra esculenta',r:['na','eu','ea'],m:[3,4,5],e:'X',h:'Spring conifer woods, at the same time as morels.',k:'Brain-like cap, chambered (not hollow) inside. Toxic even after cooking, and the fumes are dangerous.'},
+{n:'Jack-o’-lantern / tsukiyotake / ghost fungus',l:'Omphalotus spp.',r:['na','eu','ea','oc'],m:[7,8,9,10,11],e:'X',h:'Clusters on wood or buried roots; gills may glow in the dark.',k:'Severe vomiting. Mistaken for chanterelles, oysters and shiitake.'},
+{n:'Green-spored parasol',l:'Chlorophyllum molybdites',r:['na','sa','af','sas','oc','ea'],m:[6,7,8,9,10],w:1,e:'X',h:'Lawns and parks in warm climates; forms large rings.',k:'Looks like an edible parasol. Spore print is green. Causes violent illness.'},
+{n:'Poison fire coral / kaentake',l:'Trichoderma cornu-damae',r:['ea'],m:[6,7,8,9,10],e:'X',h:'Red finger-like growths at the base of oak stumps in Japan and Korea.',k:'Deadly if eaten and irritates the skin, so do not touch it.'},
+{n:'Fly agaric',l:'Amanita muscaria',r:['na','eu','ea','oc','sa','af'],m:[8,9,10,11],e:'X',h:'Red cap with white warts under birch and pine, including southern-hemisphere pine plantations.',k:'Toxic. White warts can wash off in rain, which makes it look like other red-capped species.'},
+{n:'Livid pinkgill / kusaurabenitake',l:'Entoloma sinuatum / rhodopolium',r:['eu','na','ea'],m:[8,9,10],e:'X',h:'Grey-cream caps in broadleaf woods.',k:'One of Japan’s most common poisonings. Mistaken for edible shimeji and St George’s mushroom; the spores are pink.'},
+{n:'Sulphur tuft',l:'Hypholoma fasciculare',r:['na','eu','ea','oc'],m:[4,5,6,7,8,9,10,11,12],e:'X',h:'Dense sulphur-yellow clusters on stumps almost all year.',k:'Mistaken for honey fungus. Very bitter, with greenish gills.'}
+];
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const TL={E:'Choice edible',C:'Edible with caution',X:'Toxic / deadly'};
+$('country').innerHTML=C.map(c=>`<option>${esc(c[0])}</option>`).join('');
+$('month').innerHTML=MN.map((m,i)=>`<option value="${i+1}">${['January','February','March','April','May','June','July','August','September','October','November','December'][i]}</option>`).join('');
+let saved={};try{saved=JSON.parse(localStorage.getItem('forage')||'{}')}catch(e){}
+$('country').value=saved.country||'Japan';$('city').value=saved.city||'';$('month').value=saved.month||String(new Date().getMonth()+1);
+const local=(s,hem)=>hem==='S'?s.m.map(x=>((x+5)%12)+1):s.m;
+function card(s,months){const lk=s.e==='X'?`<p>${esc(s.k)}</p>`:`<p class="lk"><b>Dangerous lookalikes:</b> ${esc(s.k)}</p>`;
+return `<article class="sp"><div><span class="tag t-${s.e}">${TL[s.e]}</span></div><h3>${esc(s.n)}</h3><div class="lat">${esc(s.l)}</div><p>${esc(s.h)}</p>${lk}<p style="color:var(--soft);font-size:14px">Usual season here: ${months}</p><a href="https://www.inaturalist.org/taxa/search?q=${encodeURIComponent(s.l.split(/[\/(]/)[0].replace(' spp.','').replace(' group','').trim())}">See verified photos on iNaturalist</a></article>`}
+function range(ms){if(ms.length>=11)return 'most of the year';return ms.map(x=>MN[x-1]).join(', ')}
+function render(){
+const cn=C.find(c=>c[0]===$('country').value),reg=cn[1],hem=cn[2],trop=!!cn[3],mo=+$('month').value,city=$('city').value.trim();
+try{localStorage.setItem('forage',JSON.stringify({country:cn[0],city,month:String(mo)}))}catch(e){}
+const inR=S.filter(s=>s.r.includes(reg)).map(s=>({...s,lm:local(s,hem)}));
+const on=s=>s.lm.includes(mo)||(trop&&s.w);
+inR.sort((a,b)=>(on(b)-on(a))||((a.e==='X')-(b.e==='X'))||a.n.localeCompare(b.n));
+$('where').textContent=`${MN[mo-1]} in ${city?city+', ':''}${cn[0]}`;
+$('hemi').textContent=`${RN[reg]} · ${hem==='S'?'Southern':'Northern'} hemisphere${trop?' · tropical: fruiting follows the rainy season':''}`;
+$('aih').textContent=`A local list for ${city||cn[0]}`;
+$('cal').innerHTML=`<div class="row hd"><div class="nm">Species</div>${MN.map((m,i)=>`<div class="c${i+1===mo?' now':''}">${window.innerWidth<600?m[0]:m}</div>`).join('')}</div>`+
+inR.map(s=>`<div class="row${s.e==='X'?' tox':''}"><div class="nm" title="${esc(s.n)}">${esc(s.n)}</div>${MN.map((_,i)=>{const f=s.lm.includes(i+1),p=s.lm.includes(i||12),q=s.lm.includes(i+2>12?1:i+2);return `<div class="c${i+1===mo?' now':''}">${f?`<i class="${p?'':'l'} ${q?'':'r'}"></i>`:''}</div>`}).join('')}</div>`).join('');
+const ed=inR.filter(s=>s.e!=='X'&&on(s)),tx=inR.filter(s=>s.e==='X'&&on(s));
+$('ecount').textContent=ed.length?`${ed.length} species typically fruiting in ${RN[reg]} this month, with the safest beginner picks first.`:'';
+ed.sort((a,b)=>(a.e>b.e)-(a.e<b.e)||a.n.localeCompare(b.n));
+$('edible').innerHTML=ed.length?ed.map(s=>card(s,range(s.lm))).join(''):`<div class="empty">None of the built-in species usually fruit in ${RN[reg]} in ${MN[mo-1]}. Try a neighbouring month, or ask Claude for a local list below.</div>`;
+$('toxic').innerHTML=tx.length?tx.map(s=>card(s,range(s.lm))).join(''):`<div class="empty">No major deadly species from the built-in guide peak this month, but toxic mushrooms can fruit at any time.</div>`;
+$('aiout').innerHTML='';$('st').textContent='';
+}
+$('f').addEventListener('submit',e=>{e.preventDefault();render()});
+['country','month'].forEach(id=>$(id).addEventListener('change',render));
+let sample=null;$('ask').hidden=true;
+Promise.resolve(window.claude?.use?.('sample')).then(s=>{sample=s||null;$('ask').hidden=!sample;if(!sample)$('st').textContent='Asking Claude is available when this page is opened on claude.ai.'}).catch(()=>{});
+$('ask').addEventListener('click',async()=>{
+if(!sample)return;const cn=$('country').value,city=$('city').value.trim(),mo=MN[+$('month').value-1];
+const place=city?`${city}, ${cn}`:cn;$('ask').disabled=true;$('st').textContent=`Asking Claude about ${place} in ${mo}…`;$('aiout').innerHTML='';
+const prompt=`You are a cautious professional mycologist. List wild mushrooms commonly found in ${place} in ${mo}, considering local climate, altitude, habitats and the hemisphere. Include the edible species foragers there actually look for AND the most dangerous toxic species fruiting at that time. Be conservative: only include species reliably documented in that region. Reply ONLY with JSON: {"summary":"2-3 sentences on the local foraging season and conditions","rules":"1-2 sentences on local foraging laws, permits or land-access norms; say if unsure","contacts":"name of a real local mycological society or expert group if you are confident one exists, else empty","species":[{"name":"common English name","local":"local-language name or empty","latin":"","edibility":"choice edible|edible with caution|toxic|deadly","habitat":"where and on what it grows locally","lookalikes":"dangerous lookalikes and how to tell them apart"}]} with 6-14 species.`;
+try{const r=await sample.json(prompt,{modelTier:'complex',cache:true});const sp=Array.isArray(r?.species)?r.species:[];
+const em=x=>/deadly|toxic/i.test(x)?'X':/caution/i.test(x)?'C':'E';
+$('aiout').innerHTML=`<div class="box"><p style="margin:0 0 6px">${esc(r.summary)}</p><p style="margin:0;color:var(--soft)"><b>Rules:</b> ${esc(r.rules)}${r.contacts?` · <b>Get finds checked by:</b> ${esc(r.contacts)}`:''}</p></div><div class="grid">`+
+sp.map(s=>{const e=em(s.edibility||'');return `<article class="sp"><div><span class="tag t-${e}">${esc(s.edibility)}</span><span class="tag t-AI">AI-generated</span></div><h3>${esc(s.name)}${s.local?` <span style="font-weight:500;color:var(--soft);font-size:17px">· ${esc(s.local)}</span>`:''}</h3><div class="lat">${esc(s.latin)}</div><p>${esc(s.habitat)}</p><p class="lk"><b>${e==='X'?'Confused with:':'Dangerous lookalikes:'}</b> ${esc(s.lookalikes)}</p><a href="https://www.inaturalist.org/taxa/search?q=${encodeURIComponent(s.latin||s.name)}">Check observations on iNaturalist</a></article>`}).join('')+`</div>`;
+$('st').textContent=`Claude’s answer for ${place}. It may contain errors, so check every species against iNaturalist and a local expert before picking.`;
+}catch(err){$('st').textContent=err?.code==='rate_limited'?'Too many requests. Please wait a minute and try again.':err?.code==='not_granted'?'Asking Claude isn’t available in this view.':'Claude couldn’t answer just now. Please try again.';if(err?.code==='not_granted')$('ask').hidden=true}
+finally{$('ask').disabled=false}});
+render();
+}
+</script>
+</body></html>

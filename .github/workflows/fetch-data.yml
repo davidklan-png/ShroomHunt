@@ -1,0 +1,77 @@
+# Runs the downloads on GitHub's machines (open internet) and stores the files as a GitHub Release.
+# Raw data never goes into git history: GBIF files can exceed GitHub's 100 MB file limit.
+#
+# One-time setup: repo Settings → Secrets and variables → Actions → add
+#   GBIF_USER (username, not email), GBIF_PWD, GBIF_EMAIL
+# Run: Actions tab → "Fetch data" → Run workflow
+name: Fetch data
+on:
+  workflow_dispatch:
+    inputs:
+      gbif:
+        description: "GBIF downloads to request"
+        type: choice
+        options: [all, japan, neighbours, none]
+        default: all
+      resume_key:
+        description: "Optional: an existing GBIF download key to collect instead of requesting a new one"
+        required: false
+      mushroomobserver:
+        description: "Also fetch Mushroom Observer CSVs"
+        type: boolean
+        default: false
+  # Monthly refresh. Each run creates new GBIF downloads with new DOIs, so leave this off until the pipeline is stable.
+  # schedule:
+  #   - cron: "17 3 2 * *"
+
+permissions:
+  contents: write   # needed to create the Release that holds the data files
+
+concurrency: fetch-data
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350   # GBIF can take hours; if this times out, re-run with resume_key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: GBIF
+        if: ${{ inputs.gbif != 'none' || inputs.resume_key != '' }}
+        env:
+          GBIF_USER: ${{ secrets.GBIF_USER }}
+          GBIF_PWD: ${{ secrets.GBIF_PWD }}
+          GBIF_EMAIL: ${{ secrets.GBIF_EMAIL }}
+          WHICH: ${{ inputs.gbif }}
+          RESUME: ${{ inputs.resume_key }}
+        run: |
+          if [ -n "$RESUME" ]; then python3 pipeline/gbif_request.py --resume "$RESUME"
+          elif [ "$WHICH" = "all" ]; then python3 pipeline/gbif_request.py
+          else python3 pipeline/gbif_request.py "$WHICH"; fi
+
+      - name: Mushroom Observer
+        if: ${{ inputs.mushroomobserver }}
+        run: |
+          mkdir -p data/raw/mushroomobserver && cd data/raw/mushroomobserver
+          for f in observations names locations; do
+            curl -fsSL --retry 3 -o "$f.csv" "https://mushroomobserver.org/$f.csv"
+            sleep 6   # stay well under MO's anonymous rate limit
+          done
+          gzip -9 *.csv
+
+      - name: Inspect columns
+        run: python3 pipeline/inspect_raw.py
+
+      - name: Publish as a release
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          shopt -s nullglob
+          files=(data/raw/gbif/* data/raw/mushroomobserver/* docs/raw_schema.md)
+          [ ${#files[@]} -gt 1 ] || { echo "Nothing downloaded"; exit 1; }
+          tag="data-$(date -u +%Y%m%d-%H%M)"
+          notes="Raw downloads for ShroomHunt. Cite GBIF downloads by the DOI in each .json file."
+          for j in data/raw/gbif/*.json; do notes="$notes"$'\n'"- $(basename "$j" .json): https://doi.org/$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['doi'])" "$j")"; done
+          gh release create "$tag" "${files[@]}" --title "$tag" --notes "$notes"
+          echo "### Release $tag created" >> "$GITHUB_STEP_SUMMARY"; echo "$notes" >> "$GITHUB_STEP_SUMMARY"
