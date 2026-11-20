@@ -46,14 +46,14 @@ totals["sensitive_species"] = one("select count(distinct speciesKey) from jp whe
 totals["sensitive_records"] = one("select count(*) from jp where speciesKey in (select k from sens)")[0]
 totals["redlist_names"] = redlist_n
 
-evidence = rows("select basisOfRecord, count(*) from jp group by 1 order by 2 desc")
+evidence = rows("select basisOfRecord, count(*) from jp group by 1 order by 2 desc, 1")
 id_depth = rows("""select case when taxonRank in ('SPECIES','VARIETY','SUBSPECIES','FORM') then 'species'
                                when taxonRank='GENUS' then 'genus' else 'higher' end d, count(*) from jp group by 1 order by 2 desc""")
-phyla = rows("select coalesce(phylum,'Unknown'), count(*), count(distinct speciesKey) from jp group by 1 order by 2 desc limit 8")
+phyla = rows("select coalesce(phylum,'Unknown'), count(*), count(distinct speciesKey) from jp group by 1 order by 2 desc, 1 limit 8")
 decades = rows("""select (try_cast(year as int)//10)*10 dec, count(*) from jp where try_cast(year as int) between 1850 and 2100
                   group by 1 order by 1""")
 families = rows("""select family, count(distinct speciesKey) sp, count(*) n from jp where family is not null
-                   group by 1 order by 2 desc limit 15""")
+                   group by 1 order by 2 desc, 1 limit 15""")
 
 # JIS X 0410 2nd mesh (lat 5', lon 7.5'): code and centre. Sensitive species excluded.
 mesh = rows("""
@@ -63,16 +63,16 @@ mesh = rows("""
                floor((lon - floor(lon))*8) v2, speciesKey from p where lat between 20 and 46 and lon between 122 and 154)
   select round((p1 + (q2+0.5)/8)/1.5, 4) clat, round(u1 + 100 + (v2+0.5)/8, 4) clon,
          count(*) n, count(distinct speciesKey) sp
-  from m group by p1,u1,q2,v2 order by n desc""")
+  from m group by p1,u1,q2,v2 order by n desc, clat, clon""")
 
 leads = rows("""select species, family, neighbour_records, mo_records, triage_hint from neighbour_candidates
                 where mo_records > 0 and species not in (select name from sens_names)
-                order by neighbour_records desc, mo_records desc limit 60""")
+                order by neighbour_records desc, mo_records desc, species limit 60""")
 lead_totals = dict(zip(["neighbour_only", "with_mo", "with_unresolved_jp_genus"], one("""
   select count(*), count(*) filter (where mo_records>0),
          count(*) filter (where mo_records>0 and triage_hint like 'Japanese%') from neighbour_candidates""")))
 unresolved = rows("""select genus, family, count(*) n from jp where taxonRank='GENUS' and genus is not null
-                     group by 1,2 order by 3 desc limit 15""")
+                     group by 1,2 order by 3 desc, 1 limit 15""")
 mo_jp = one("select count(*) from jp where datasetKey='d714382d-5890-4234-ae81-696eeb53658a'")[0]
 
 sources = []

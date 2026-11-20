@@ -1,0 +1,58 @@
+# Rebuilds the public dashboard summary from the newest data releases and opens a pull request
+# on kinokoholic.com (davidklan-png/Bio_HP) that replaces assets/data/shroomhunt/dashboard.json.
+# Nothing is published until David merges that pull request.
+#
+# One-time setup: secret BIO_HP_TOKEN = a fine-grained personal access token limited to the
+# Bio_HP repository, with "Contents: read and write" and "Pull requests: read and write".
+name: Publish dashboard
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Fetch data"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency: publish-dashboard
+
+jobs:
+  publish:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install duckdb==1.1.3
+
+      - name: Download newest data releases
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: python3 pipeline/fetch_latest_release_assets.py "${{ github.repository }}"
+
+      - name: Build database and dashboard summary
+        run: |
+          python3 pipeline/build_db.py data/raw/gbif/japan/*.csv data/raw/gbif/neighbours/*.csv data/raw/gbif/mushroomobserver/*.csv data/shroomhunt.duckdb
+          python3 pipeline/build_dashboard_data.py --out dashboard.json \
+            --meta data/raw/gbif/japan_*.json data/raw/gbif/neighbours_*.json data/raw/gbif/mushroomobserver_*.json \
+            --redlist data/raw/redlist/redlist_fungi_jp.json
+
+      - name: Open pull request on Bio_HP
+        env:
+          GH_TOKEN: ${{ secrets.BIO_HP_TOKEN }}
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::error::Secret BIO_HP_TOKEN is not set (see top of this file)"; exit 1; }
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/davidklan-png/Bio_HP.git" site
+          mkdir -p site/assets/data/shroomhunt
+          cp dashboard.json site/assets/data/shroomhunt/dashboard.json
+          cd site
+          if git diff --quiet; then echo "Dashboard data unchanged"; exit 0; fi
+          branch="data/shroomhunt-$(date -u +%Y%m%d-%H%M)"
+          git checkout -b "$branch"
+          git -c user.name="ShroomHunt bot" -c user.email="davidklan-png@users.noreply.github.com" \
+            commit -am "Update Japan fungi dashboard data ($(date -u +%Y-%m-%d))"
+          git push -u origin "$branch"
+          body=$(python3 -c "import json;d=json.load(open('assets/data/shroomhunt/dashboard.json'));t=d['totals'];print(f\"Records: {t['records']:,} · species: {t['species']:,} · leads: {d['lead_totals']['with_mo']:,} · sensitive species masked: {t['sensitive_species']}\\n\\nSources:\\n\"+'\\n'.join('- https://doi.org/'+s['doi'] for s in d['sources']))")
+          gh pr create --repo davidklan-png/Bio_HP --base main --head "$branch" \
+            --title "Update Japan fungi dashboard data" --body "$body"
