@@ -16,7 +16,9 @@ Public-safety rule (§6/§7, TASK-005): no occurrence-derived detail survives in
 Habitat/host prose, locality text and elevation are withdrawn (h/l/el empty, top_localities empty,
 by_name 0); area tables, months and candidate geography derive only from eligible records placed
 on whole JIS cells; candidate distances are 50 km bands between a public area centre and snapped
-cell centroids (East Asia keeps its native 1° cells).
+cell centroids (East Asia keeps its native 1° cells). The source-precision eligibility itself is
+shared with build_dashboard_data.py via pipeline/eligibility.py (TASK-006), and §6 v1 files carry
+schema_version 1 plus a bundle snapshot stamped by pipeline/snapshot.py.
 
 Usage: python3 pipeline/build_areas.py --out data/processed/areas  [--db data/shroomhunt.duckdb]
        [--redlist data/raw/redlist/redlist_fungi_jp.json]
@@ -32,6 +34,8 @@ from geo_ja import (PREFECTURES, norm_pref, haversine_km, neighbour_place,  # no
                     cell_key, cell_center, mesh_cell, tile_id,
                     MESH_LAT_CELLS, MESH_LON_CELLS, MESH_EPS, ROW_MIN, ROW_MAX, COL_MIN, COL_MAX)
 from public_taxa import SPECIES_RANKS, load_gate  # noqa: E402
+from eligibility import precision_selection, spatially_eligible  # noqa: E402
+from snapshot import write_json  # noqa: E402
 
 MAX_KM, DECAY_KM, LAT_DECAY = 800, 250, 1.5
 BAND_KM, BAND_CAP = 50, 250   # §6: candidate d is the lower edge of a 50 km band (250 = 250 km+)
@@ -66,43 +70,12 @@ tables = {r[0] for r in c.execute("select table_name from information_schema.tab
 # ---------- shared protected-taxon gate (TASK-002) -----------------------------------------
 gate = load_gate(mask=a.mask, coverage=a.coverage, exceptions=a.exceptions, redlist=a.redlist)
 
-# ---------- source-precision eligibility (§7, TASK-005) -------------------------------------
-# A record joins the spatial subset only when nothing says its coordinates are wrong or
-# coarser than one 2nd-mesh cell. Each check applies only when the loaded tables actually
-# carry the column (a missing column is skipped, never guessed):
-#   jp.coordinateUncertaintyInMeters > CELL_MAX_UNCERTAINTY_M (5' of latitude, the cell's
-#       largest dimension: the true point can leave its own cell)
-#   jp.coordinatePrecision > CELL_MAX_PRECISION (coarser than the cell's latitude unit)
-#   jp.issue containing a flag from BAD_ISSUES (broken or relocated coordinates)
-#   jp_extra.dataGeneralizations / informationWithheld (DwC-A only): any non-empty value
-#       excludes the record — what exactly was generalized or withheld cannot be checked,
-#       so this fails closed.
-CELL_MAX_UNCERTAINTY_M = 9260        # metres: 5 minutes of latitude
-CELL_MAX_PRECISION = 1 / MESH_LAT_CELLS
-BAD_ISSUES = {"ZERO_COORDINATE", "COORDINATE_INVALID", "COORDINATE_OUT_OF_RANGE",
-              "COORDINATE_UNCERTAINTY_METERS_INVALID", "PRESUMED_SWAPPED_COORDINATE",
-              "PRESUMED_NEGATED_LATITUDE", "PRESUMED_NEGATED_LONGITUDE"}
-
-def spatially_eligible(unc, prec, issues, generalized, withheld):
-    """May this record's coordinates place it on a public JIS cell?"""
-    if unc is not None and unc > CELL_MAX_UNCERTAINTY_M: return False
-    if prec is not None and prec > CELL_MAX_PRECISION: return False
-    if issues and BAD_ISSUES & {s.strip() for s in issues.split(";")}: return False
-    return not ((generalized and generalized.strip()) or (withheld and withheld.strip()))
+# ---------- source-precision eligibility (§7) ------------------------------------------------
+# Shared with build_dashboard_data.py since TASK-006 (pipeline/eligibility.py), so a cell
+# held only by flagged/coarsened records can appear in neither output, never in just one.
+elig_join, sel = precision_selection(c)
 
 # ---------- base records -------------------------------------------------------------------
-jp_cols = {r[0] for r in c.execute("select column_name from information_schema.columns "
-                                   "where table_name='jp'").fetchall()}
-xe_cols = ({r[0] for r in c.execute("select column_name from information_schema.columns "
-                                    "where table_name='jp_extra'").fetchall()}
-           if "jp_extra" in tables else set())
-elig_join = ("left join jp_extra x on x.gbifID = jp.gbifID"
-             if "gbifID" in jp_cols and {"dataGeneralizations", "informationWithheld"} & xe_cols else "")
-sel = ["try_cast(jp.coordinateUncertaintyInMeters as double)" if "coordinateUncertaintyInMeters" in jp_cols else "null",
-       "try_cast(jp.coordinatePrecision as double)" if "coordinatePrecision" in jp_cols else "null",
-       "jp.issue" if "issue" in jp_cols else "null",
-       *([f"x.{col}" if col in xe_cols else "null" for col in ("dataGeneralizations", "informationWithheld")]
-         if elig_join else ["null", "null"])]
 rows = c.execute(f"""
   select jp.speciesKey, jp.species, jp.family, jp.taxonRank, jp.basisOfRecord, jp.class, jp.genus,
          try_cast(jp.decimalLatitude as double), try_cast(jp.decimalLongitude as double),
@@ -296,12 +269,13 @@ for aid, lst in sorted(area_recs.items()):
                         "h": [], "l": [], "nm": 0, "el": None})
     out = {"id": aid, "kind": "island" if isl else "tile", "name_en": name_en, "name_ja": name_ja,
            "group_en": group_en, "group_ja": group_ja, "bbox": [round(x, 4) for x in bbox],
+           "schema_version": 1, "snapshot": "",
            "totals": {"records": len(lst), "by_name": 0, "species": len(species), "unresolved": unresolved,
                       "squares": len({cell_key(*r[5]) for r in lst if r[5] is not None})},
            "months": months_all, "top_localities": [],
            # §6: a zero-record entry keeps its route and public reference bbox with empty data
            "species": species, "possible": possible_for(aid, center, set(by_sp)) if lst else []}
-    json.dump(out, open(os.path.join(a.out, f"{aid}.json"), "w"), ensure_ascii=False, separators=(",", ":"))
+    write_json(os.path.join(a.out, f"{aid}.json"), out)
     built[aid] = out
     index.append({"id": aid, "kind": out["kind"], "name_en": name_en, "name_ja": name_ja, "group_en": group_en,
                   "group_ja": group_ja, "bbox": out["bbox"], "records": len(lst), "species": len(species)})
@@ -337,16 +311,18 @@ for (gen, gja), members in sorted(groups.items()):
     tot = {k: sum(built[m]["totals"][k] for m in members) for k in ("records", "by_name", "unresolved", "squares")}
     tot["species"] = len(species)
     out = {"id": gid, "kind": "group", "members": members, "name_en": gen, "name_ja": gja, "group_en": gen, "group_ja": gja,
-           "bbox": bb, "totals": tot, "months": [sum(built[m]["months"][k] for m in members) for k in range(12)],
+           "bbox": bb, "schema_version": 1, "snapshot": "", "totals": tot,
+           "months": [sum(built[m]["months"][k] for m in members) for k in range(12)],
            "top_localities": [], "species": species, "possible": possible,
            "member_names": {m: [built[m]["name_en"], built[m]["name_ja"]] for m in members}}
-    json.dump(out, open(os.path.join(a.out, f"{gid}.json"), "w"), ensure_ascii=False, separators=(",", ":"))
+    write_json(os.path.join(a.out, f"{gid}.json"), out)
     index.append({"id": gid, "kind": "group", "name_en": gen, "name_ja": gja, "group_en": gen, "group_ja": gja,
                   "bbox": bb, "records": tot["records"], "species": len(species), "members": members})
 
-json.dump({"areas": index, "cells": dict(sorted(cell_area.items())), "masked_records": masked,
-           "has_habitat": False, "has_neighbours": "ea" in tables},
-          open(os.path.join(a.out, "index.json"), "w"), ensure_ascii=False, separators=(",", ":"))
+# §6 v1 AreaIndex shape; snapshot stays empty until pipeline/snapshot.py stamps the bundle.
+write_json(os.path.join(a.out, "index.json"),
+           {"schema_version": 1, "snapshot": "", "areas": index, "cells": dict(sorted(cell_area.items())),
+            "masked_records": masked, "has_habitat": False, "has_neighbours": "ea" in tables})
 print(f"{len(index)} areas ({sum(1 for x in index if x['kind']=='island')} islands), {len(cell_area)} squares mapped, "
       f"{masked} sensitive records excluded, precision flags applied={sum(x != 'null' for x in sel)}/5, "
       f"neighbours={'ea' in tables}")

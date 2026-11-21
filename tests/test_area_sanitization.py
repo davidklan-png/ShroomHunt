@@ -254,6 +254,7 @@ DWCA_FULL = ("gbifID\thabitat\tassociatedTaxa\televation\tdataGeneralizations\ti
              "2\t\t\t\t\tlocality withheld\n")
 DWCA_THIN = ("gbifID\thabitat\tassociatedTaxa\televation\n"   # an archive without the precision fields
              "1\tlitter\t\t\n")
+DWCA_ULTRATHIN = "gbifID\trecordedBy\n1\tsomeone\n"           # only the join key (TASK-006 header guard)
 
 
 class BuildDbEligibilityFields(unittest.TestCase):
@@ -293,6 +294,15 @@ class BuildDbEligibilityFields(unittest.TestCase):
         self.assertIn("dataGeneralizations", cols)
         self.assertIn("informationWithheld", cols)
         self.assertEqual(n, (1, 0, 0))
+
+    def test_archive_without_detail_columns_still_builds(self):
+        # habitat/associatedTaxa/elevation are header-guarded like the precision fields:
+        # an archive without them builds, with null columns instead of a SQL error
+        c = self.load(DWCA_ULTRATHIN)
+        rows = c.execute("select habitat, assoc, elevation, dataGeneralizations, informationWithheld "
+                         "from jp_extra").fetchall()
+        c.close()
+        self.assertEqual(rows, [(None, None, None, None, None)])
 
 
 if __name__ == "__main__":

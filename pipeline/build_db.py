@@ -25,19 +25,21 @@ if a.japan_dwca:
     # habitat text, host / associated plants and elevation from the DwC-A, plus the
     # source-precision fields build_areas.py needs for spatial eligibility (§7/TASK-005):
     # any non-empty dataGeneralizations/informationWithheld excludes a record from spatial
-    # outputs. Archives without a field get a null column, never a guess.
+    # outputs. Every field is header-guarded: an archive without a column gets a null
+    # column, never a guess (TASK-006 extends the guard to habitat/associatedTaxa/elevation).
     # Biogeographic realms and placeholders are not habitats, so they are dropped.
     with open(a.japan_dwca) as f:
         dwca_cols = set(f.readline().rstrip("\r\n").split("\t"))
     dwca = lambda name: f"trim({name})" if name in dwca_cols else "null"
+    hab, assoc, elev = dwca("habitat"), dwca("associatedTaxa"), dwca("elevation")
     c.execute(f"""create or replace table jp_extra as
         select gbifID,
-               case when regexp_matches(lower(coalesce(habitat,'')),
+               case when regexp_matches(lower(coalesce({hab},'')),
                     '^\\s*$|palearctic|indomalayan|nearctic|neotropic|australasian|oriental region|no habitat|^unknown$|^n/?a$')
-                    then null else trim(habitat) end as habitat,
-               case when regexp_matches(lower(coalesce(associatedTaxa,'')), '^\\s*$|undetermined|^unknown')
-                    then null else trim(regexp_replace(associatedTaxa, '^(host|substrate|on)\\s*:\\s*', '', 'i')) end as assoc,
-               try_cast(elevation as double) as elevation,
+                    then null else {hab} end as habitat,
+               case when regexp_matches(lower(coalesce({assoc},'')), '^\\s*$|undetermined|^unknown')
+                    then null else trim(regexp_replace({assoc}, '^(host|substrate|on)\\s*:\\s*', '', 'i')) end as assoc,
+               try_cast({elev} as double) as elevation,
                {dwca("dataGeneralizations")} as dataGeneralizations,
                {dwca("informationWithheld")} as informationWithheld
         from {r(a.japan_dwca)}""")

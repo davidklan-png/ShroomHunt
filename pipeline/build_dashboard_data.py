@@ -15,6 +15,8 @@ from collections import defaultdict
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from geo_ja import cell_center, mesh_cell  # noqa: E402
 from public_taxa import load_gate  # noqa: E402
+from eligibility import precision_selection, spatially_eligible  # noqa: E402
+from snapshot import write_json  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--db", default="data/shroomhunt.duckdb")
@@ -55,13 +57,18 @@ families = rows(f"""select family, count(distinct speciesKey) sp, count(*) n fro
 
 # JIS X 0410 2nd mesh (lat 5', lon 7.5') via the canonical geometry in geo_ja
 # (TASK-004): integer cell keys here match build_areas.py cell ownership exactly.
-# Sensitive species excluded. MeshRow = [center_lat, center_lon, records, species].
-pts = c.execute(f"""select try_cast(decimalLatitude as double), try_cast(decimalLongitude as double), speciesKey
-                    from jp where decimalLatitude is not null and {public}""").fetchall()
+# Sensitive species excluded, and the shared source-precision eligibility applies
+# (TASK-006): a cell held only by flagged/coarsened records appears in no spatial
+# output at all, this one included. MeshRow = [center_lat, center_lon, records, species].
+elig_join, sel = precision_selection(c)
+pts = c.execute(f"""select try_cast(jp.decimalLatitude as double), try_cast(jp.decimalLongitude as double), jp.speciesKey,
+                    {", ".join(sel)}
+                    from jp {elig_join} where jp.decimalLatitude is not null and {public}""").fetchall()
 cells = defaultdict(lambda: [0, set()])            # (row, col) -> [records, species keys]
-for lat, lon, sk in pts:
+for lat, lon, sk, unc, prec, iss, genz, held in pts:
     cell = mesh_cell(lat, lon)
-    if cell is None: continue                      # non-finite or outside the shared envelope
+    if cell is None or not spatially_eligible(unc, prec, iss, genz, held):
+        continue                                   # non-finite, outside the envelope, or ineligible
     hit = cells[cell]
     hit[0] += 1
     if sk is not None: hit[1].add(sk)
@@ -83,11 +90,14 @@ for f in a.meta:
     m = json.load(open(f))
     sources.append({"key": m["key"], "doi": m["doi"], "records": m.get("totalRecords"), "created": m.get("created")})
 
-out = {"generated": time.strftime("%Y-%m-%d"), "totals": totals, "evidence": evidence, "id_depth": id_depth,
+# §6 v1 Dashboard shape (TASK-006): schema_version 1 everywhere; snapshot stays
+# empty here and is stamped over the whole staging bundle by pipeline/snapshot.py.
+out = {"schema_version": 1, "snapshot": "", "generated": time.strftime("%Y-%m-%d"),
+       "totals": totals, "evidence": evidence, "id_depth": id_depth,
        "phyla": phyla, "decades": decades, "families": families, "mesh": mesh, "leads": leads,
        "lead_totals": lead_totals, "unresolved_genera": unresolved, "mushroom_observer_japan": mo_jp,
        "sources": sources}
-json.dump(out, open(a.out, "w"), separators=(",", ":"), ensure_ascii=False)
+write_json(a.out, out)
 print(f"wrote {a.out}: {len(mesh)} mesh cells, {len(leads)} leads, "
       f"{totals['sensitive_records']} records masked/quarantined "
       f"({one('select count(*) from jp where speciesKey::varchar in (select k from sens)')[0]} by Red List key), "
