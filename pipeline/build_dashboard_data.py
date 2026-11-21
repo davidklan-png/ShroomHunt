@@ -10,8 +10,10 @@ Usage: python3 pipeline/build_dashboard_data.py --out dashboard.json \
          --meta data/raw/gbif/*.json --redlist data/raw/redlist/redlist_fungi_jp.json
 Needs: pip install duckdb. Run pipeline/build_db.py and analysis/01_neighbour_candidates.sql first."""
 import argparse, json, os, sys, time, duckdb
+from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from geo_ja import cell_center, mesh_cell  # noqa: E402
 from public_taxa import load_gate  # noqa: E402
 
 ap = argparse.ArgumentParser()
@@ -44,22 +46,27 @@ totals["redlist_names"] = gate.redlist_names
 
 evidence = rows("select basisOfRecord, count(*) from jp group by 1 order by 2 desc, 1")
 id_depth = rows("""select case when taxonRank in ('SPECIES','VARIETY','SUBSPECIES','FORM') then 'species'
-                               when taxonRank='GENUS' then 'genus' else 'higher' end d, count(*) from jp group by 1 order by 2 desc""")
+                               when taxonRank='GENUS' then 'genus' else 'higher' end d, count(*) from jp group by 1 order by 2 desc, 1""")
 phyla = rows("select coalesce(phylum,'Unknown'), count(*), count(distinct speciesKey) from jp group by 1 order by 2 desc, 1 limit 8")
 decades = rows("""select (try_cast(year as int)//10)*10 as "dec", count(*) from jp
                   where try_cast(year as int) between 1850 and 2100 group by 1 order by 1""")
 families = rows(f"""select family, count(distinct speciesKey) sp, count(*) n from jp
                    where family is not null and {public} group by 1 order by 2 desc, 1 limit 15""")
 
-# JIS X 0410 2nd mesh (lat 5', lon 7.5'): code and centre. Sensitive species excluded.
-mesh = rows(f"""
-  with p as (select try_cast(decimalLatitude as double) lat, try_cast(decimalLongitude as double) lon, speciesKey
-             from jp where decimalLatitude is not null and {public}),
-  m as (select floor(lat*1.5) p1, floor(lon)-100 u1, floor((lat*1.5 - floor(lat*1.5))*8) q2,
-               floor((lon - floor(lon))*8) v2, speciesKey from p where lat between 20 and 46 and lon between 122 and 154)
-  select round((p1 + (q2+0.5)/8)/1.5, 4) clat, round(u1 + 100 + (v2+0.5)/8, 4) clon,
-         count(*) n, count(distinct speciesKey) sp
-  from m group by p1,u1,q2,v2 order by n desc, clat, clon""")
+# JIS X 0410 2nd mesh (lat 5', lon 7.5') via the canonical geometry in geo_ja
+# (TASK-004): integer cell keys here match build_areas.py cell ownership exactly.
+# Sensitive species excluded. MeshRow = [center_lat, center_lon, records, species].
+pts = c.execute(f"""select try_cast(decimalLatitude as double), try_cast(decimalLongitude as double), speciesKey
+                    from jp where decimalLatitude is not null and {public}""").fetchall()
+cells = defaultdict(lambda: [0, set()])            # (row, col) -> [records, species keys]
+for lat, lon, sk in pts:
+    cell = mesh_cell(lat, lon)
+    if cell is None: continue                      # non-finite or outside the shared envelope
+    hit = cells[cell]
+    hit[0] += 1
+    if sk is not None: hit[1].add(sk)
+mesh = [[*cell_center(row, col), n, len(sp)] for (row, col), (n, sp) in cells.items()]
+mesh.sort(key=lambda r: (-r[2], r[0], r[1]))       # records desc, then place: deterministic
 
 leads = rows("""select species, family, neighbour_records, mo_records, triage_hint from neighbour_candidates
                 where mo_records > 0 order by neighbour_records desc, mo_records desc, species limit 60""")

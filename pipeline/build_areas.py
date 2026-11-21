@@ -21,7 +21,8 @@ from collections import Counter, defaultdict
 import duckdb
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from geo_ja import PREFECTURES, norm_pref, haversine_km, neighbour_place  # noqa: E402
+from geo_ja import (PREFECTURES, norm_pref, haversine_km, neighbour_place,  # noqa: E402
+                    cell_key, mesh_cell, mesh_key, tile_id)
 from public_taxa import SPECIES_RANKS, load_gate  # noqa: E402
 
 MAX_KM, DECAY_KM, LAT_DECAY = 800, 250, 1.5
@@ -81,9 +82,17 @@ for i in islands:
     if kanji_al: parts.append("(?:" + "|".join(kanji_al) + ")")
     i["rx"] = re.compile("|".join(parts))
 
-def island_by_coords(lat, lon):
+def island_by_center(row, col):
+    """Island owning the cell's centre point, or None (TASK-004).
+
+    Area ownership is per whole cell, never per raw coordinate. islands.csv
+    order is the explicit priority list: when boxes overlap at the centre, the
+    earlier row wins (ids are unique, so that order is total) — never record
+    order. No island claims the centre -> the 1st-mesh tile owns the cell.
+    """
+    clat, clon = (row + 0.5) / 12, (col + 0.5) / 8
     for i in islands:
-        if i["lat_min"] <= lat <= i["lat_max"] and i["lon_min"] <= lon <= i["lon_max"]: return i["id"]
+        if i["lat_min"] <= clat <= i["lat_max"] and i["lon_min"] <= clon <= i["lon_max"]: return i["id"]
     return None
 
 def island_by_name(loc, sp):
@@ -92,12 +101,6 @@ def island_by_name(loc, sp):
     for i in islands:
         if i["rx"].search(text) and (pref is None or pref == i["prefecture"]): return i["id"]
     return None
-
-def tile_id(lat, lon):
-    return f"t{int(math.floor(lat * 1.5))}{int(math.floor(lon)) - 100:02d}"
-
-def mesh_key(lat, lon):
-    return f"{math.floor(lat * 12 + 1e-9)}:{math.floor(lon * 8 + 1e-9)}"
 
 EVID = {"PRESERVED_SPECIMEN": "s", "MATERIAL_SAMPLE": "d", "LIVING_SPECIMEN": "s", "MATERIAL_CITATION": "s"}
 area_recs = defaultdict(list)       # area -> records
@@ -108,9 +111,10 @@ for r in recs:
     hab = hab or None
     fam_class[fam or ""][cls] += 1
     kd = kind(cls, fam, gen or (sp or "").split(" ")[0])
-    if lat is not None and lon is not None and 20 <= lat <= 46 and 122 <= lon <= 154:
-        aid = island_by_coords(lat, lon) or tile_id(lat, lon)
-        cell_area[mesh_key(lat, lon)] = aid
+    cell = mesh_cell(lat, lon)
+    if cell is not None:
+        aid = island_by_center(*cell) or tile_id(*cell)
+        cell_area[cell_key(*cell)] = aid
         how = "c"
         if aid.startswith("t"):
             p = norm_pref(prov)
@@ -119,6 +123,8 @@ for r in recs:
         aid, how = island_by_name(loc, prov), "n"
         if not aid: continue
     area_recs[aid].append((key, sp, fam, rank, EVID.get(bor, "o"), lat, lon, mon, yr, loc, hab, how, kd, elev))
+for i in islands:   # every known island keeps its route even when its eligible records drop to zero
+    area_recs.setdefault(i["id"], [])
 
 # ---------- nearby sources for "could occur here" -----------------------------------------
 labels = {}
@@ -127,23 +133,25 @@ def area_label(aid):
     i = next((x for x in islands if x["id"] == aid), None)
     if i: lab = (i["name_en"], i["name_ja"])
     else:
-        p = tile_prefs[aid].most_common(1)[0][0] if tile_prefs[aid] else None
+        p = sorted(tile_prefs[aid].items(), key=lambda kv: (-kv[1], kv[0]))[0][0] if tile_prefs[aid] else None
         lab = (p or "Japan", PREFECTURES.get(p, "日本"))
     labels[aid] = lab
     return lab
 
-jp_points = defaultdict(lambda: defaultdict(lambda: [0] * 13))   # sp -> (lat,lon,label) -> [12 months + total]
+jp_points = defaultdict(lambda: defaultdict(lambda: [0] * 13))   # sp -> (cell centre, label) -> [12 months + total]
 for aid, lst in area_recs.items():
     for (key, sp, fam, rank, ev, lat, lon, mon, yr, loc, hab, how, kd, elev) in lst:
         if rank in SPECIES_RANKS and sp and lat is not None:
-            v = jp_points[(sp, fam or "", kd)][(round(lat * 12) / 12, round(lon * 8) / 8, aid)]
+            cell = mesh_cell(lat, lon)          # one deterministic full-cell centroid per source mesh
+            if cell is None: continue
+            v = jp_points[(sp, fam or "", kd)][((cell[0] + 0.5) / 12, (cell[1] + 0.5) / 8, aid)]
             v[12] += 1
             if mon and 1 <= mon <= 12: v[mon - 1] += 1
 if "nb" in tables:
     for fam, cls, n in c.execute("select family, class, count(*) from nb where family is not null group by 1,2").fetchall():
         fam_class[fam][cls] += n
 def fam_kind(fam, sp):
-    cls = fam_class[fam].most_common(1)[0][0] if fam_class.get(fam) else None
+    cls = sorted(fam_class[fam].items(), key=lambda kv: (-kv[1], kv[0]))[0][0] if fam_class.get(fam) else None
     return kind(cls, fam, (sp or "").split(" ")[0])
 
 if "ea" in tables:
@@ -167,7 +175,7 @@ def possible_for(aid, center, present):
     for (sp, fam, kd), pts in jp_points.items():
         if sp in present: continue
         score, near, months = 0.0, None, [0] * 12
-        for (lat, lon, where), v in pts.items():
+        for (lat, lon, where), v in sorted(pts.items()):   # fixed order: identical float sums under row shuffles
             if where == aid: continue
             d = haversine_km(center[0], center[1], lat, lon)
             if d > MAX_KM: continue
@@ -219,7 +227,8 @@ for aid, lst in sorted(area_recs.items()):
                                   "e": Counter(), "h": Counter(), "l": Counter(), "nm": 0, "el": []})
         s["r"] += 1
         if mon and 1 <= mon <= 12: s["m"][mon - 1] += 1
-        if lat is not None: s["sq"].add(mesh_key(lat, lon))
+        mk = mesh_key(lat, lon)
+        if mk is not None: s["sq"].add(mk)
         if yr: s["y"] = [min(s["y"][0], yr), max(s["y"][1], yr)]
         s["e"][ev] += 1
         if hab and len(hab.strip().rstrip(".")) >= 4:
@@ -231,15 +240,20 @@ for aid, lst in sorted(area_recs.items()):
     species = []
     for s in sorted(by_sp.values(), key=lambda s: (-s["r"], s["n"])):
         species.append({"n": s["n"], "f": s["f"], "k": s["k"], "r": s["r"], "m": s["m"], "sq": len(s["sq"]),
-                        "y": s["y"] if s["y"][1] else None, "e": dict(s["e"]),
-                        "h": [h for h, _ in s["h"].most_common(2)], "l": [l for l, _ in s["l"].most_common(2)],
+                        "y": s["y"] if s["y"][1] else None,
+                        "e": dict(sorted(s["e"].items(), key=lambda kv: (-kv[1], kv[0]))),
+                        "h": [h for h, _ in sorted(s["h"].items(), key=lambda kv: (-kv[1], kv[0]))[:2]],
+                        "l": [l for l, _ in sorted(s["l"].items(), key=lambda kv: (-kv[1], kv[0]))[:2]],
                         "nm": s["nm"], "el": [round(min(s["el"])), round(max(s["el"]))] if s["el"] else None})
     out = {"id": aid, "kind": "island" if isl else "tile", "name_en": name_en, "name_ja": name_ja,
            "group_en": group_en, "group_ja": group_ja, "bbox": [round(x, 4) for x in bbox],
            "totals": {"records": len(lst), "by_name": sum(1 for r in lst if r[11] == "n"), "species": len(species),
-                      "unresolved": unresolved, "squares": len({mesh_key(*p) for p in coords})},
-           "months": months_all, "top_localities": locs.most_common(5),
-           "species": species, "possible": possible_for(aid, center, set(by_sp))}
+                      "unresolved": unresolved,
+                      "squares": len({k for k in (mesh_key(*p) for p in coords) if k is not None})},
+           "months": months_all,
+           "top_localities": [(l, n) for l, n in sorted(locs.items(), key=lambda kv: (-kv[1], kv[0]))[:5]],
+           # §6: a zero-record entry keeps its route and public reference bbox with empty data
+           "species": species, "possible": possible_for(aid, center, set(by_sp)) if lst else []}
     json.dump(out, open(os.path.join(a.out, f"{aid}.json"), "w"), ensure_ascii=False, separators=(",", ":"))
     built[aid] = out
     index.append({"id": aid, "kind": out["kind"], "name_en": name_en, "name_ja": name_ja, "group_en": group_en,
@@ -282,7 +296,7 @@ for (gen, gja), members in sorted(groups.items()):
     index.append({"id": gid, "kind": "group", "name_en": gen, "name_ja": gja, "group_en": gen, "group_ja": gja,
                   "bbox": bb, "records": tot["records"], "species": len(species), "members": members})
 
-json.dump({"areas": index, "cells": cell_area, "masked_records": masked,
+json.dump({"areas": index, "cells": dict(sorted(cell_area.items())), "masked_records": masked,
            "has_habitat": "jp_extra" in tables, "has_neighbours": "ea" in tables},
           open(os.path.join(a.out, "index.json"), "w"), ensure_ascii=False, separators=(",", ":"))
 print(f"{len(index)} areas ({sum(1 for x in index if x['kind']=='island')} islands), {len(cell_area)} squares mapped, "
