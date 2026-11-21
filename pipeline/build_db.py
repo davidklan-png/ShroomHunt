@@ -22,8 +22,14 @@ for t, f in (("jp", a.japan), ("nb", a.neighbours), ("mo", a.mo)):
     c.execute(f"create or replace table {t} as select * from {r(f)}")
     print(t, c.execute(f"select count(*) from {t}").fetchone()[0], "rows")
 if a.japan_dwca:
-    # habitat text, host / associated plants and elevation from the DwC-A. Biogeographic realms and
-    # placeholders are not habitats, so they are dropped.
+    # habitat text, host / associated plants and elevation from the DwC-A, plus the
+    # source-precision fields build_areas.py needs for spatial eligibility (§7/TASK-005):
+    # any non-empty dataGeneralizations/informationWithheld excludes a record from spatial
+    # outputs. Archives without a field get a null column, never a guess.
+    # Biogeographic realms and placeholders are not habitats, so they are dropped.
+    with open(a.japan_dwca) as f:
+        dwca_cols = set(f.readline().rstrip("\r\n").split("\t"))
+    dwca = lambda name: f"trim({name})" if name in dwca_cols else "null"
     c.execute(f"""create or replace table jp_extra as
         select gbifID,
                case when regexp_matches(lower(coalesce(habitat,'')),
@@ -31,10 +37,14 @@ if a.japan_dwca:
                     then null else trim(habitat) end as habitat,
                case when regexp_matches(lower(coalesce(associatedTaxa,'')), '^\\s*$|undetermined|^unknown')
                     then null else trim(regexp_replace(associatedTaxa, '^(host|substrate|on)\\s*:\\s*', '', 'i')) end as assoc,
-               try_cast(elevation as double) as elevation
+               try_cast(elevation as double) as elevation,
+               {dwca("dataGeneralizations")} as dataGeneralizations,
+               {dwca("informationWithheld")} as informationWithheld
         from {r(a.japan_dwca)}""")
-    print("jp_extra", c.execute("select count(*), count(habitat), count(assoc), count(elevation) from jp_extra").fetchone(),
-          "(rows, habitat, host/associate, elevation)")
+    print("jp_extra", c.execute(
+        "select count(*), count(habitat), count(assoc), count(elevation), "
+        "count(dataGeneralizations), count(informationWithheld) from jp_extra").fetchone(),
+        "(rows, habitat, host/associate, elevation, generalized, withheld)")
 if a.eastasia:
     # records -> species x 1-degree cell x month
     c.execute(f"""create or replace table ea as
