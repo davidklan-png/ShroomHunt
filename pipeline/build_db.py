@@ -22,8 +22,19 @@ for t, f in (("jp", a.japan), ("nb", a.neighbours), ("mo", a.mo)):
     c.execute(f"create or replace table {t} as select * from {r(f)}")
     print(t, c.execute(f"select count(*) from {t}").fetchone()[0], "rows")
 if a.japan_dwca:
-    c.execute(f"create or replace table jp_extra as select gbifID, nullif(trim(habitat), '') as habitat from {r(a.japan_dwca)}")
-    print("jp_extra", c.execute("select count(*), count(habitat) from jp_extra").fetchone(), "(rows, with habitat)")
+    # habitat text, host / associated plants and elevation from the DwC-A. Biogeographic realms and
+    # placeholders are not habitats, so they are dropped.
+    c.execute(f"""create or replace table jp_extra as
+        select gbifID,
+               case when regexp_matches(lower(coalesce(habitat,'')),
+                    '^\\s*$|palearctic|indomalayan|nearctic|neotropic|australasian|oriental region|no habitat|^unknown$|^n/?a$')
+                    then null else trim(habitat) end as habitat,
+               case when regexp_matches(lower(coalesce(associatedTaxa,'')), '^\\s*$|undetermined|^unknown')
+                    then null else trim(regexp_replace(associatedTaxa, '^(host|substrate|on)\\s*:\\s*', '', 'i')) end as assoc,
+               try_cast(elevation as double) as elevation
+        from {r(a.japan_dwca)}""")
+    print("jp_extra", c.execute("select count(*), count(habitat), count(assoc), count(elevation) from jp_extra").fetchone(),
+          "(rows, habitat, host/associate, elevation)")
 if a.eastasia:
     # records -> species x 1-degree cell x month
     c.execute(f"""create or replace table ea as

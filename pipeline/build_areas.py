@@ -58,7 +58,10 @@ sens_names = {r["scientific_name"] for r in csv.DictReader(open(a.sensitive))}
 
 # ---------- base records -------------------------------------------------------------------
 habitat_join = "left join jp_extra x on x.gbifID = jp.gbifID" if "jp_extra" in tables else ""
-habitat_col = "x.habitat" if "jp_extra" in tables else "null"
+habitat_col = ("concat_ws(' · ', x.habitat, case when x.assoc is null then null "
+               "when regexp_matches(lower(x.assoc), '^(on|in|under|with|at|near|from|associated) ') then x.assoc "
+               "else 'with ' || x.assoc end), x.elevation"
+               if "jp_extra" in tables else "null, null")
 rows = c.execute(f"""
   select jp.speciesKey, jp.species, jp.family, jp.taxonRank, jp.basisOfRecord, jp.class, jp.genus,
          try_cast(jp.decimalLatitude as double), try_cast(jp.decimalLongitude as double),
@@ -100,7 +103,8 @@ area_recs = defaultdict(list)       # area -> records
 fam_class = defaultdict(Counter)
 cell_area, tile_prefs = {}, defaultdict(Counter)
 for r in recs:
-    key, sp, fam, rank, bor, cls, gen, lat, lon, mon, yr, loc, prov, hab = r
+    key, sp, fam, rank, bor, cls, gen, lat, lon, mon, yr, loc, prov, hab, elev = r
+    hab = hab or None
     fam_class[fam or ""][cls] += 1
     kd = kind(cls, fam, gen or (sp or "").split(" ")[0])
     if lat is not None and lon is not None and 20 <= lat <= 46 and 122 <= lon <= 154:
@@ -113,7 +117,7 @@ for r in recs:
     else:
         aid, how = island_by_name(loc, prov), "n"
         if not aid: continue
-    area_recs[aid].append((key, sp, fam, rank, EVID.get(bor, "o"), lat, lon, mon, yr, loc, hab, how, kd))
+    area_recs[aid].append((key, sp, fam, rank, EVID.get(bor, "o"), lat, lon, mon, yr, loc, hab, how, kd, elev))
 
 # ---------- nearby sources for "could occur here" -----------------------------------------
 labels = {}
@@ -129,7 +133,7 @@ def area_label(aid):
 
 jp_points = defaultdict(lambda: defaultdict(lambda: [0] * 13))   # sp -> (lat,lon,label) -> [12 months + total]
 for aid, lst in area_recs.items():
-    for (key, sp, fam, rank, ev, lat, lon, mon, yr, loc, hab, how, kd) in lst:
+    for (key, sp, fam, rank, ev, lat, lon, mon, yr, loc, hab, how, kd, elev) in lst:
         if rank in SPECIES_RANKS and sp and lat is not None:
             v = jp_points[(sp, fam or "", kd)][(round(lat * 12) / 12, round(lon * 8) / 8, aid)]
             v[12] += 1
@@ -204,28 +208,31 @@ for aid, lst in sorted(area_recs.items()):
     unresolved = 0
     months_all = [0] * 12
     locs = Counter()
-    for (key, sp, fam, rank, ev, lat, lon, mon, yr, loc, hab, how, kd) in lst:
+    for (key, sp, fam, rank, ev, lat, lon, mon, yr, loc, hab, how, kd, elev) in lst:
         if mon and 1 <= mon <= 12: months_all[mon - 1] += 1
         if loc: locs[loc.strip().rstrip(".")[:60]] += 1
         if rank not in SPECIES_RANKS or not sp:
             unresolved += 1
             continue
         s = by_sp.setdefault(sp, {"n": sp, "f": fam or "", "k": kd, "r": 0, "m": [0] * 12, "sq": set(), "y": [9999, 0],
-                                  "e": Counter(), "h": Counter(), "l": Counter(), "nm": 0})
+                                  "e": Counter(), "h": Counter(), "l": Counter(), "nm": 0, "el": []})
         s["r"] += 1
         if mon and 1 <= mon <= 12: s["m"][mon - 1] += 1
         if lat is not None: s["sq"].add(mesh_key(lat, lon))
         if yr: s["y"] = [min(s["y"][0], yr), max(s["y"][1], yr)]
         s["e"][ev] += 1
-        if hab: s["h"][hab.strip()[:80]] += 1
+        if hab and len(hab.strip().rstrip(".")) >= 4:
+            hk = hab.strip().rstrip(".")[:80]
+            s["h"][hk[:1].upper() + hk[1:]] += 1
         if loc: s["l"][loc.strip().rstrip(".")[:60]] += 1
         if how == "n": s["nm"] += 1
+        if elev is not None and -50 < elev < 4000: s["el"].append(elev)
     species = []
     for s in sorted(by_sp.values(), key=lambda s: (-s["r"], s["n"])):
         species.append({"n": s["n"], "f": s["f"], "k": s["k"], "r": s["r"], "m": s["m"], "sq": len(s["sq"]),
                         "y": s["y"] if s["y"][1] else None, "e": dict(s["e"]),
                         "h": [h for h, _ in s["h"].most_common(2)], "l": [l for l, _ in s["l"].most_common(2)],
-                        "nm": s["nm"]})
+                        "nm": s["nm"], "el": [round(min(s["el"])), round(max(s["el"]))] if s["el"] else None})
     out = {"id": aid, "kind": "island" if isl else "tile", "name_en": name_en, "name_ja": name_ja,
            "group_en": group_en, "group_ja": group_ja, "bbox": [round(x, 4) for x in bbox],
            "totals": {"records": len(lst), "by_name": sum(1 for r in lst if r[11] == "n"), "species": len(species),
@@ -250,11 +257,12 @@ for (gen, gja), members in sorted(groups.items()):
     for mid in members:
         for x in built[mid]["species"]:
             t = sp.setdefault(x["n"], {"n": x["n"], "f": x["f"], "k": x["k"], "r": 0, "m": [0] * 12, "sq": 0, "y": None,
-                                      "e": Counter(), "h": [], "l": [], "nm": 0, "i": []})
+                                      "e": Counter(), "h": [], "l": [], "nm": 0, "i": [], "el": None})
             t["r"] += x["r"]; t["sq"] += x["sq"]; t["nm"] += x["nm"]; t["i"].append(mid)
             t["m"] = [p + q for p, q in zip(t["m"], x["m"])]
             if x["y"]: t["y"] = [min(t["y"][0], x["y"][0]), max(t["y"][1], x["y"][1])] if t["y"] else list(x["y"])
             t["e"].update(x["e"]); t["h"] = (t["h"] + x["h"])[:2]; t["l"] = (t["l"] + x["l"])[:2]
+            if x.get("el"): t["el"] = [min(t["el"][0], x["el"][0]), max(t["el"][1], x["el"][1])] if t["el"] else list(x["el"])
     species = sorted(({**v, "e": dict(v["e"])} for v in sp.values()), key=lambda v: (-v["r"], v["n"]))
     poss = {}
     for mid in members:
