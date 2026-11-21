@@ -9,9 +9,8 @@ on:
   workflow_dispatch:
     inputs:
       gbif:
-        description: "GBIF downloads to request"
-        type: choice
-        options: [all, japan, neighbours, mushroomobserver, none]
+        description: "GBIF downloads to request: all, none, or space-separated names (japan japan_dwca neighbours eastasia_cells mushroomobserver)"
+        type: string
         default: all
       resume_key:
         description: "Optional: an existing GBIF download key to collect instead of requesting a new one"
@@ -50,7 +49,7 @@ jobs:
         run: |
           if [ -n "$RESUME" ]; then python3 pipeline/gbif_request.py --resume "$RESUME"
           elif [ "$WHICH" = "all" ]; then python3 pipeline/gbif_request.py
-          else python3 pipeline/gbif_request.py "$WHICH"; fi
+          else python3 pipeline/gbif_request.py $WHICH; fi
 
       - name: Japan fungal Red List
         run: python3 pipeline/fetch_redlist.py

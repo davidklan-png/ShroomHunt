@@ -6,6 +6,8 @@
               coordinates and uncertainty. Format SIMPLE_CSV.
   mushroomobserver  Mushroom Observer's complete dataset as published to GBIF (DOI 10.15468/wwcmna), worldwide.
               Used to cross-reference: MO records are also inside 'japan', tagged by datasetKey.
+  japan_dwca  Same as 'japan' as a Darwin Core Archive (adds habitat, substrate, remarks).
+  eastasia_cells  Neighbouring East Asia aggregated to species x 1-degree cell x month (SQL download).
   neighbours  Species list of fungi recorded in mainland East Asia, Korea, Taiwan and the Russian Far East, to flag
               species known next door but never recorded in Japan. Format SPECIES_LIST.
 
@@ -25,6 +27,18 @@ REQUESTS = {
                          "value": "d714382d-5890-4234-ae81-696eeb53658a"}),
     # East Asia box (lon 100-155E, lat 18-56N) minus Japan: China east of 100E, Koreas, Taiwan, Russian Far East
     # (Primorye, Amur, Khabarovsk, Sakhalin, Kurils). A country filter on RU pulled in European Russia.
+    # Same records as 'japan' but as a Darwin Core Archive, which carries habitat, substrate and remarks.
+    "japan_dwca": ("DWCA", {"type": "and", "predicates": [FUNGI, {"type": "equals", "key": "COUNTRY", "value": "JP"}]}),
+    # Neighbouring East Asia, aggregated server-side: species x 1-degree cell x month. Feeds "could be found here".
+    "eastasia_cells": ("SQL_TSV_ZIP", " ".join("""
+        SELECT speciesKey, species, family, ROUND(decimalLatitude) AS lat, ROUND(decimalLongitude) AS lon,
+               "month", COUNT(*) AS n
+        FROM occurrence
+        WHERE kingdomKey = 5 AND speciesKey IS NOT NULL AND countryCode <> 'JP'
+          AND decimalLatitude >= 18 AND decimalLatitude <= 50
+          AND decimalLongitude >= 100 AND decimalLongitude <= 155
+        GROUP BY speciesKey, species, family, ROUND(decimalLatitude), ROUND(decimalLongitude), "month"
+    """.split())),
     "neighbours": ("SPECIES_LIST", {"type": "and", "predicates": [FUNGI,
                    {"type": "within", "geometry": "POLYGON((100 18,155 18,155 56,100 56,100 18))"},
                    {"type": "not", "predicate": {"type": "equals", "key": "COUNTRY", "value": "JP"}}]}),
@@ -38,8 +52,10 @@ def call(url, data=None, auth=None):
 
 def submit(name, u, p, e):
     fmt, pred = REQUESTS[name]
-    body = json.dumps({"creator": u, "notificationAddresses": [e], "sendNotification": True,
-                       "format": fmt, "predicate": pred}).encode()
+    req = {"creator": u, "notificationAddresses": [e], "sendNotification": True, "format": fmt}
+    if fmt == "SQL_TSV_ZIP": req["sql"] = pred
+    else: req["predicate"] = pred
+    body = json.dumps(req).encode()
     try: key = call(API + "/request", body, f"{u}:{p}").decode().strip()
     except urllib.error.HTTPError as err:
         sys.exit(f"GBIF refused '{name}' ({err.code}): {err.read().decode()[:800]}")
@@ -65,7 +81,7 @@ def main():
     if a[:1] == ["--resume"]: return wait_and_fetch(a[1], "resumed")
     u, p, e = (os.environ.get(k) for k in ("GBIF_USER", "GBIF_PWD", "GBIF_EMAIL"))
     if not (u and p and e): sys.exit("Set GBIF_USER, GBIF_PWD and GBIF_EMAIL first (see top of this file).")
-    names = a or list(REQUESTS)
+    names = a or ["japan", "neighbours", "mushroomobserver", "eastasia_cells"]
     keys = {n: submit(n, u, p, e) for n in names}   # submit all first so GBIF processes them in parallel
     for n, k in keys.items(): wait_and_fetch(k, n)
 
