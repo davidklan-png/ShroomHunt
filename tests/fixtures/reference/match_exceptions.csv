@@ -1,0 +1,4 @@
+# FICTIONAL test fixture for TASK-002 — these taxa do not exist. Never mix with real names.
+name,action,note
+Publicus vulgaris,ignore,Fuzzy match hit the wrong genus; reviewer confirmed public (TEST)
+Boletus fictus,alias,Old combination of Matsutakus fictus (TEST)

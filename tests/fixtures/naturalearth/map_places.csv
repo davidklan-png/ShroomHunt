@@ -1,0 +1,5 @@
+# Fixture anchors for the map reference build (TASK-003); the "||" exercises empty-alias dropping.
+en,ja,aliases,lon,lat,area_id
+Naha,那覇,naha|ナハ,127.6818,26.2122,okinawa-honto
+Yanbaru,やんばる,yanbaru|山原|kunigami,128.2,26.7,okinawa-honto
+Nowhere,場外,nowhere||far away|Nowhere,150.0,40.0,

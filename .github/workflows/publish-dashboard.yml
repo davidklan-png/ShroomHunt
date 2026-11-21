@@ -1,12 +1,33 @@
-# Rebuilds the public dashboard summary from the newest data releases and opens a pull request
-# on kinokoholic.com (davidklan-png/Bio_HP) that replaces assets/data/shroomhunt/dashboard.json.
-# Nothing is published until David merges that pull request.
+# Rebuilds the public dashboard summary from the newest releases of the PRIVATE staging repo
+# (STAGING_REPO variable + STAGING_TOKEN secret — see docs/private-input-staging.md) and, only
+# when enable_public_pr is set, opens a pull request on kinokoholic.com (davidklan-png/Bio_HP)
+# that replaces assets/data/shroomhunt/dashboard.json. Nothing is published until David merges
+# that pull request.
+#
+# Phase 1C (plan §5 row 1C, §6): everything is built into a private staging/ directory first,
+# stamped with one bundle snapshot (pipeline/snapshot.py) and validated by
+# pipeline/validate_dashboard_publish.py. A validator failure aborts the job BEFORE any
+# Bio_HP clone, copy or PR: the unsafe-fixture-stops-publication path. The occurrence PR
+# stays behind enable_public_pr (default false) for David's explicit go per run.
+#
+# Rollback (plan §5 row 1C / §7): restore the last approved complete snapshot, or withdraw the
+# affected occurrence files and serve geography-only (the geography_only input below builds and
+# validates japan-outline.json alone). Purge changed URLs at the edge after either.
 #
 # One-time setup: secret BIO_HP_TOKEN = a fine-grained personal access token limited to the
 # Bio_HP repository, with "Contents: read and write" and "Pull requests: read and write".
 name: Publish dashboard
 on:
   workflow_dispatch:
+    inputs:
+      enable_public_pr:
+        description: "Open the Bio_HP data PR (validator must be green first; David's go per run)"
+        type: boolean
+        default: false
+      geography_only:
+        description: "Build only japan-outline.json (reference geography): no occurrence fetch, no DuckDB"
+        type: boolean
+        default: false
   workflow_run:
     workflows: ["Fetch data"]
     types: [completed]
@@ -26,12 +47,17 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install duckdb==1.1.3
+        if: ${{ inputs.geography_only != true }}
 
       - name: Download newest data releases
-        env: { GH_TOKEN: "${{ github.token }}" }
-        run: python3 pipeline/fetch_latest_release_assets.py "${{ github.repository }}"
+        if: ${{ inputs.geography_only != true }}
+        env:
+          GH_TOKEN: ${{ secrets.STAGING_TOKEN }}
+          STAGING_REPO: ${{ vars.STAGING_REPO }}
+        run: python3 pipeline/fetch_latest_release_assets.py
 
-      - name: Build database, dashboard summary and area drill-down files
+      - name: Build database and the v1 occurrence bundle into staging
+        if: ${{ inputs.geography_only != true }}
         run: |
           extra=""
           [ -f data/raw/gbif/japan_dwca/occurrence.txt ] && extra="$extra --japan-dwca data/raw/gbif/japan_dwca/occurrence.txt"
@@ -39,27 +65,64 @@ jobs:
           [ -n "$ea" ] && extra="$extra --eastasia $ea"
           python3 pipeline/build_db.py --japan data/raw/gbif/japan/*.csv --neighbours data/raw/gbif/neighbours/*.csv \
             --mo data/raw/gbif/mushroomobserver/*.csv --db data/shroomhunt.duckdb $extra
-          python3 pipeline/build_dashboard_data.py --out dashboard.json \
+          python3 pipeline/build_dashboard_data.py --out staging/dashboard.json \
             --meta $(ls data/raw/gbif/*.json) --redlist data/raw/redlist/redlist_fungi_jp.json
-          python3 pipeline/build_areas.py --out areas --redlist data/raw/redlist/redlist_fungi_jp.json
+          python3 pipeline/build_areas.py --out staging/areas --redlist data/raw/redlist/redlist_fungi_jp.json
+          python3 pipeline/snapshot.py staging
+
+      - name: Build reference geography into staging (geography_only)
+        if: ${{ inputs.geography_only == true }}
+        run: |
+          mkdir -p staging
+          python3 pipeline/build_map_reference.py --out staging/japan-outline.json
+
+      - name: Validate staging bundle (publication gate)
+        run: |
+          python3 pipeline/validate_dashboard_publish.py staging \
+            --mask data/reference/taxon_mask.csv --coverage data/reference/redlist_coverage.csv \
+            --exceptions data/reference/match_exceptions.csv --redlist data/raw/redlist/redlist_fungi_jp.json
 
       - name: Open pull request on Bio_HP
+        if: ${{ inputs.enable_public_pr == true }}
         env:
           GH_TOKEN: ${{ secrets.BIO_HP_TOKEN }}
+          GEOGRAPHY_ONLY: ${{ inputs.geography_only }}
         run: |
           [ -n "$GH_TOKEN" ] || { echo "::error::Secret BIO_HP_TOKEN is not set (see top of this file)"; exit 1; }
           git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/davidklan-png/Bio_HP.git" site
           mkdir -p site/assets/data/shroomhunt
-          cp dashboard.json site/assets/data/shroomhunt/dashboard.json
-          rm -rf site/assets/data/shroomhunt/areas && cp -r areas site/assets/data/shroomhunt/areas
+          if [ "$GEOGRAPHY_ONLY" = "true" ]; then
+            cp staging/japan-outline.json site/assets/data/shroomhunt/japan-outline.json
+            title="Update Japan reference geography"
+            body=$(python3 -c "import json;d=json.load(open('staging/japan-outline.json'));v=sum(len(r) for p in d['land'] for r in p);print(f\"Reference geography: Natural Earth {d['source']['release']} · {len(d['land'])} land polygons · {v:,} vertices · {len(d['places'])} places\\n\\nSource: {d['source']['url']}\")")
+          else
+            cp staging/dashboard.json site/assets/data/shroomhunt/dashboard.json
+            rm -rf site/assets/data/shroomhunt/areas && cp -r staging/areas site/assets/data/shroomhunt/areas
+            [ -f staging/japan-outline.json ] && cp staging/japan-outline.json site/assets/data/shroomhunt/japan-outline.json
+            [ -f staging/mesh-research.json ] && cp staging/mesh-research.json site/assets/data/shroomhunt/mesh-research.json
+            title="Update Japan fungi dashboard data"
+            body=$(python3 -c "import json;d=json.load(open('staging/dashboard.json'));t=d['totals'];print(f\"Records: {t['records']:,} · species: {t['species']:,} · leads: {d['lead_totals']['with_mo']:,} · sensitive species masked: {t['sensitive_species']} · snapshot: {d['snapshot'][:12]}\\n\\nSources:\\n\"+'\\n'.join('- https://doi.org/'+s['doi'] for s in d['sources']))")
+          fi
           cd site
           git add -A assets/data/shroomhunt
-          if git diff --cached --quiet; then echo "Dashboard data unchanged"; exit 0; fi
+          if git diff --cached --quiet; then echo "Staged data unchanged; no PR needed"; exit 0; fi
           branch="data/shroomhunt-$(date -u +%Y%m%d-%H%M)"
           git checkout -b "$branch"
           git -c user.name="ShroomHunt bot" -c user.email="davidklan-png@users.noreply.github.com" \
-            commit -m "Update Japan fungi dashboard data ($(date -u +%Y-%m-%d))"
+            commit -m "$title ($(date -u +%Y-%m-%d))"
           git push -u origin "$branch"
-          body=$(python3 -c "import json;d=json.load(open('assets/data/shroomhunt/dashboard.json'));t=d['totals'];print(f\"Records: {t['records']:,} · species: {t['species']:,} · leads: {d['lead_totals']['with_mo']:,} · sensitive species masked: {t['sensitive_species']}\\n\\nSources:\\n\"+'\\n'.join('- https://doi.org/'+s['doi'] for s in d['sources']))")
           gh pr create --repo davidklan-png/Bio_HP --base main --head "$branch" \
-            --title "Update Japan fungi dashboard data" --body "$body"
+            --title "$title" --body "$body"
+
+      - name: Public data PR not requested
+        if: ${{ inputs.enable_public_pr != true }}
+        env:
+          GEOGRAPHY_ONLY: ${{ inputs.geography_only }}
+        run: |
+          echo "### Bio_HP data PR not opened" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$GEOGRAPHY_ONLY" = "true" ]; then
+            echo "Reference geography built and validated; the Bio_HP PR still needs enable_public_pr=true." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The occurrence bundle was built, stamped and validated in staging; opening the Bio_HP PR" \
+                 "needs enable_public_pr=true (docs/map-improvement-plan.md §5 row 1C)." >> "$GITHUB_STEP_SUMMARY"
+          fi

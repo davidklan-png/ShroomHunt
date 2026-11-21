@@ -1,0 +1,10 @@
+{
+ "dataset": "00000000-0000-0000-0000-000000000000",
+ "doi": "10.0000/test",
+ "fetched": "2026-11-21",
+ "species": [
+  {"name": "Rareus japonicus", "status": ["EN"], "speciesKey": 9001, "matchType": "EXACT"},
+  {"name": "Dubius ambiguus", "status": ["VU"], "speciesKey": 9002, "matchType": "FUZZY"},
+  {"name": "Publicus vulgaris", "status": ["LC"], "speciesKey": 9003, "matchType": "HIGHERRANK"}
+ ]
+}

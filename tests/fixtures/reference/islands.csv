@@ -1,0 +1,2 @@
+id,name_en,name_ja,group_en,group_ja,lat_min,lat_max,lon_min,lon_max,prefecture,aliases
+testisle,Test Island,テスト島,Test Islands,テスト諸島,26.0,27.0,127.5,128.5,Okinawa,test isle|テスト島
