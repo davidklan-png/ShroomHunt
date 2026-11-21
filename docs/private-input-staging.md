@@ -55,3 +55,16 @@ deleting a release hides the asset but forks, clones and caches may retain copie
 (plan §7 "document the window of exposure and David's decision about withdrawal"). When
 decided: delete via the GitHub UI or `gh release delete` — this repo deliberately ships no
 deletion automation.
+## Remediation decision (resolved)
+
+Decision by David Klan, 2026-11-22: delete the historical public raw-data releases
+and accept that previously forked/cloned/cached copies may persist. All six
+`data-*` releases on public ShroomHunt (2026-11-20/21, including the 28.7 MB
+East Asia raw archive) were deleted with their tags. Raw inputs now stage only
+on the private `davidklan-png/ShroomHunt-staging` repository.
+
+The taxon mask (`data/reference/taxon_mask.csv`) was reviewed and approved the
+same day; the Red List coverage row is appended mechanically after the first
+staging fetch (`python3 pipeline/public_taxa.py data/raw/redlist/redlist_fungi_jp.json
+>> data/reference/redlist_coverage.csv`) and the gate verifies it against the
+actual download before any publish.
