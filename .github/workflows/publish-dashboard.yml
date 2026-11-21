@@ -35,7 +35,7 @@ jobs:
         run: |
           extra=""
           [ -f data/raw/gbif/japan_dwca/occurrence.txt ] && extra="$extra --japan-dwca data/raw/gbif/japan_dwca/occurrence.txt"
-          ea=$(ls data/raw/gbif/eastasia_cells/* 2>/dev/null | head -1)
+          ea=$(ls data/raw/gbif/eastasia/* 2>/dev/null | head -1)
           [ -n "$ea" ] && extra="$extra --eastasia $ea"
           python3 pipeline/build_db.py --japan data/raw/gbif/japan/*.csv --neighbours data/raw/gbif/neighbours/*.csv \
             --mo data/raw/gbif/mushroomobserver/*.csv --db data/shroomhunt.duckdb $extra

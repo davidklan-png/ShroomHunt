@@ -7,7 +7,7 @@
   mushroomobserver  Mushroom Observer's complete dataset as published to GBIF (DOI 10.15468/wwcmna), worldwide.
               Used to cross-reference: MO records are also inside 'japan', tagged by datasetKey.
   japan_dwca  Same as 'japan' as a Darwin Core Archive (adds habitat, substrate, remarks).
-  eastasia_cells  Neighbouring East Asia aggregated to species x 1-degree cell x month (SQL download).
+  eastasia    Neighbouring East Asia records with coordinates (aggregated locally into species x cell x month).
   neighbours  Species list of fungi recorded in mainland East Asia, Korea, Taiwan and the Russian Far East, to flag
               species known next door but never recorded in Japan. Format SPECIES_LIST.
 
@@ -29,16 +29,14 @@ REQUESTS = {
     # (Primorye, Amur, Khabarovsk, Sakhalin, Kurils). A country filter on RU pulled in European Russia.
     # Same records as 'japan' but as a Darwin Core Archive, which carries habitat, substrate and remarks.
     "japan_dwca": ("DWCA", {"type": "and", "predicates": [FUNGI, {"type": "equals", "key": "COUNTRY", "value": "JP"}]}),
-    # Neighbouring East Asia, aggregated server-side: species x 1-degree cell x month. Feeds "could be found here".
-    "eastasia_cells": ("SQL_TSV_ZIP", " ".join("""
-        SELECT speciesKey, species, family, ROUND(decimalLatitude) AS lat, ROUND(decimalLongitude) AS lon,
-               "month", COUNT(*) AS n
-        FROM occurrence
-        WHERE kingdomKey = 5 AND speciesKey IS NOT NULL AND countryCode <> 'JP'
-          AND decimalLatitude >= 18 AND decimalLatitude <= 50
-          AND decimalLongitude >= 100 AND decimalLongitude <= 155
-        GROUP BY speciesKey, species, family, ROUND(decimalLatitude), ROUND(decimalLongitude), "month"
-    """.split())),
+    # Neighbouring East Asia records with coordinates (same area as 'neighbours'), aggregated locally by
+    # build_db.py into species x 1-degree cell x month. Feeds "could be found here". (A GBIF SQL download
+    # returned 0 rows on 2026-11-21, so the predicate route is used.)
+    "eastasia": ("SIMPLE_CSV", {"type": "and", "predicates": [FUNGI,
+                 {"type": "within", "geometry": "POLYGON((100 18,155 18,155 56,100 56,100 18))"},
+                 {"type": "not", "predicate": {"type": "equals", "key": "COUNTRY", "value": "JP"}},
+                 {"type": "equals", "key": "HAS_COORDINATE", "value": "true"},
+                 {"type": "equals", "key": "HAS_GEOSPATIAL_ISSUE", "value": "false"}]}),
     "neighbours": ("SPECIES_LIST", {"type": "and", "predicates": [FUNGI,
                    {"type": "within", "geometry": "POLYGON((100 18,155 18,155 56,100 56,100 18))"},
                    {"type": "not", "predicate": {"type": "equals", "key": "COUNTRY", "value": "JP"}}]}),
@@ -81,7 +79,7 @@ def main():
     if a[:1] == ["--resume"]: return wait_and_fetch(a[1], "resumed")
     u, p, e = (os.environ.get(k) for k in ("GBIF_USER", "GBIF_PWD", "GBIF_EMAIL"))
     if not (u and p and e): sys.exit("Set GBIF_USER, GBIF_PWD and GBIF_EMAIL first (see top of this file).")
-    names = a or ["japan", "neighbours", "mushroomobserver", "eastasia_cells"]
+    names = a or ["japan", "neighbours", "mushroomobserver", "eastasia"]
     keys = {n: submit(n, u, p, e) for n in names}   # submit all first so GBIF processes them in parallel
     for n, k in keys.items(): wait_and_fetch(k, n)
 

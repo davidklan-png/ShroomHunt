@@ -8,7 +8,7 @@ repo = sys.argv[1]
 # name pattern -> (folder, required). Exact patterns, because "japan_" would also match "japan_dwca_".
 PREFIXES = {"japan_": ("data/raw/gbif", True), "neighbours_": ("data/raw/gbif", True),
             "mushroomobserver_": ("data/raw/gbif", True), "redlist_fungi_jp": ("data/raw/redlist", True),
-            "japan_dwca_": ("data/raw/gbif", False), "eastasia_cells_": ("data/raw/gbif", False)}
+            "japan_dwca_": ("data/raw/gbif", False), "eastasia_": ("data/raw/gbif", False)}
 def matches(name, p):
     return re.match(re.escape(p) + (r"\d" if p.endswith("_") else ""), name) is not None
 

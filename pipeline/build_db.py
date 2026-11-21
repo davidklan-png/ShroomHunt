@@ -25,6 +25,10 @@ if a.japan_dwca:
     c.execute(f"create or replace table jp_extra as select gbifID, nullif(trim(habitat), '') as habitat from {r(a.japan_dwca)}")
     print("jp_extra", c.execute("select count(*), count(habitat) from jp_extra").fetchone(), "(rows, with habitat)")
 if a.eastasia:
-    c.execute(f"create or replace table ea as select * from {r(a.eastasia)}")
-    print("ea", c.execute("select count(*) from ea").fetchone()[0], "rows; columns:",
-          [x[0] for x in c.execute("describe ea").fetchall()])
+    # records -> species x 1-degree cell x month
+    c.execute(f"""create or replace table ea as
+        select speciesKey, species, family, round(try_cast(decimalLatitude as double)) as lat,
+               round(try_cast(decimalLongitude as double)) as lon, try_cast(month as int) as month, count(*) as n
+        from {r(a.eastasia)} where speciesKey is not null and species is not null
+        group by all""")
+    print("ea", c.execute("select count(*), sum(n), count(distinct species) from ea").fetchone(), "(cells, records, species)")

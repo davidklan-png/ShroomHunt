@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       gbif:
-        description: "GBIF downloads to request: all, none, or space-separated names (japan japan_dwca neighbours eastasia_cells mushroomobserver)"
+        description: "GBIF downloads to request: all, none, or space-separated names (japan japan_dwca neighbours eastasia mushroomobserver)"
         type: string
         default: all
       resume_key:
