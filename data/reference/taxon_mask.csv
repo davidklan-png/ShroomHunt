@@ -1,0 +1,12 @@
+# UNREVIEWED SEED — carried over verbatim from sensitive_species.csv by TASK-002.
+# David + taxon reviewer must sign off before the next publish (plan §7).
+# aliases: pipe-separated synonyms/old combinations that also mask.
+scientific_name,aliases,reason
+Tricholoma matsutake,,Commercially poached; matsutake grounds are leased
+Tricholoma bakamatsutake,,Commercially collected with matsutake
+Tuber himalayense,,Truffle: commercially collected
+Tuber japonicum,,Truffle: commercially collected
+Tuber longispinosum,,Truffle: commercially collected
+Ophiocordyceps sinensis,,High-value collecting
+Ganoderma lucidum,,Commercially collected
+Grifola frondosa,,Commercially collected

@@ -3,6 +3,8 @@
 -- Each row is a LEAD for an expert to triage into one of:
 --   (a) naming mismatch: Japanese records exist under another name, (b) under-recorded in Japan,
 --   (c) truly absent. Only a voucher specimen (tier A/B) can turn a lead into a record.
+-- TASK-002: the shared protected-taxon gate (pipeline/public_taxa.py) must install its temp
+-- tables (sens, sens_names) before this file runs; without them this fails closed.
 create or replace table neighbour_candidates as
 with jps as (select distinct speciesKey from jp where speciesKey is not null),
 jpg as (select genus, count(*) jp_genus_records,
@@ -20,4 +22,6 @@ select nb.species, nb.phylum, nb."order", nb.family, nb.genus,
             else 'genus known in Japan' end as triage_hint
 from nb left join mos using (speciesKey) left join jpg using (genus)
 where nb.taxonRank = 'SPECIES' and nb.taxonomicStatus = 'ACCEPTED'
-  and nb.speciesKey not in (select speciesKey from jps);
+  and nb.speciesKey not in (select speciesKey from jps)
+  and nb.speciesKey::varchar not in (select k from sens)
+  and lower(coalesce(nb.species, '')) not in (select name from sens_names);

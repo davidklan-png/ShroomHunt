@@ -9,7 +9,8 @@ habitat and locality notes) and a ranked list of species that COULD occur there:
 or neighbouring East Asia, up to MAX_KM away) but never in the area. The ranking weights each nearby
 record by distance and latitude difference. It is a pointer for fieldwork, not a prediction.
 
-Public-safety rule (D6): Red List and commercially collected species are excluded from every list.
+Public-safety rule (D6): Red List and commercially collected species are excluded from every list,
+via the shared gate in pipeline/public_taxa.py (TASK-002).
 
 Usage: python3 pipeline/build_areas.py --out data/processed/areas  [--db data/shroomhunt.duckdb]
        [--redlist data/raw/redlist/redlist_fungi_jp.json]
@@ -21,6 +22,7 @@ import duckdb
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from geo_ja import PREFECTURES, norm_pref, haversine_km, neighbour_place  # noqa: E402
+from public_taxa import SPECIES_RANKS, load_gate  # noqa: E402
 
 MAX_KM, DECAY_KM, LAT_DECAY = 800, 250, 1.5
 
@@ -38,23 +40,21 @@ def kind(cls, fam, genus):
     if cls in LICHEN_CLASSES or fam in LICHEN_FAMILIES: return "l"
     if cls in MACRO_CLASSES or genus in MACRO_GENERA: return "m"
     return "o"
-SPECIES_RANKS = ("SPECIES", "VARIETY", "SUBSPECIES", "FORM")
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--db", default="data/shroomhunt.duckdb")
 ap.add_argument("--out", default="data/processed/areas")
 ap.add_argument("--redlist", default="data/raw/redlist/redlist_fungi_jp.json")
-ap.add_argument("--sensitive", default="data/reference/sensitive_species.csv")
+ap.add_argument("--mask", default="data/reference/taxon_mask.csv")
+ap.add_argument("--coverage", default="data/reference/redlist_coverage.csv")
+ap.add_argument("--exceptions", default="data/reference/match_exceptions.csv")
 ap.add_argument("--islands", default="data/reference/islands.csv")
 a = ap.parse_args()
 c = duckdb.connect(a.db)
 tables = {r[0] for r in c.execute("select table_name from information_schema.tables").fetchall()}
 
-# ---------- sensitive species --------------------------------------------------------------
-sens_keys = set()
-if os.path.exists(a.redlist):
-    sens_keys |= {str(s["speciesKey"]) for s in json.load(open(a.redlist))["species"] if s.get("speciesKey")}
-sens_names = {r["scientific_name"] for r in csv.DictReader(open(a.sensitive))}
+# ---------- shared protected-taxon gate (TASK-002) -----------------------------------------
+gate = load_gate(mask=a.mask, coverage=a.coverage, exceptions=a.exceptions, redlist=a.redlist)
 
 # ---------- base records -------------------------------------------------------------------
 habitat_join = "left join jp_extra x on x.gbifID = jp.gbifID" if "jp_extra" in tables else ""
@@ -67,8 +67,9 @@ rows = c.execute(f"""
          try_cast(jp.decimalLatitude as double), try_cast(jp.decimalLongitude as double),
          try_cast(jp.month as int), try_cast(jp.year as int), jp.locality, jp.stateProvince, {habitat_col}
   from jp {habitat_join}""").fetchall()
-recs = [r for r in rows if not (r[0] in sens_keys or r[1] in sens_names)]
-masked = len(rows) - len(recs)
+audit = gate.audit((r[1], r[0], r[6], r[3]) for r in rows)
+recs = [r for r in rows if gate.is_public(species=r[1], species_key=r[0], genus=r[6], taxon_rank=r[3])]
+masked = len(rows) - audit["public"]
 
 islands = list(csv.DictReader(open(a.islands)))
 for i in islands:
@@ -146,9 +147,9 @@ def fam_kind(fam, sp):
     return kind(cls, fam, (sp or "").split(" ")[0])
 
 if "ea" in tables:
-    for sp, fam, lat, lon, mon, n in c.execute(
-            "select species, coalesce(family,''), try_cast(lat as double), try_cast(lon as double), try_cast(\"month\" as int), try_cast(n as int) from ea where species is not null").fetchall():
-        if sp in sens_names or lat is None: continue
+    for key, sp, fam, lat, lon, mon, n in c.execute(
+            "select speciesKey, species, coalesce(family,''), try_cast(lat as double), try_cast(lon as double), try_cast(\"month\" as int), try_cast(n as int) from ea where species is not null").fetchall():
+        if not gate.is_public(species=sp, species_key=key) or lat is None: continue
         v = jp_points[(sp, fam, fam_kind(fam, sp))][(lat, lon, "ea")]
         v[12] += n or 0
         if mon and 1 <= mon <= 12: v[mon - 1] += n or 0
@@ -286,3 +287,4 @@ json.dump({"areas": index, "cells": cell_area, "masked_records": masked,
           open(os.path.join(a.out, "index.json"), "w"), ensure_ascii=False, separators=(",", ":"))
 print(f"{len(index)} areas ({sum(1 for x in index if x['kind']=='island')} islands), {len(cell_area)} squares mapped, "
       f"{masked} sensitive records excluded, habitat={'jp_extra' in tables}, neighbours={'ea' in tables}")
+print(f"gate audit (aggregate): {audit}")

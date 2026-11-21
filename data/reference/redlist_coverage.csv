@@ -1,0 +1,5 @@
+# UNREVIEWED SEED — no coverage row yet, so publishing stays blocked (fail closed).
+# After a fresh Red List download, append a row and have it reviewed:
+#   python3 pipeline/public_taxa.py data/raw/redlist/redlist_fungi_jp.json >> data/reference/redlist_coverage.csv
+# The gate checks sha256/names/matched/ambiguous against the actual download.
+sha256,names,matched,ambiguous

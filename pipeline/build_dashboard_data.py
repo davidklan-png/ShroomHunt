@@ -9,56 +9,52 @@ Public-safety rules (decision D6):
 Usage: python3 pipeline/build_dashboard_data.py --out dashboard.json \
          --meta data/raw/gbif/*.json --redlist data/raw/redlist/redlist_fungi_jp.json
 Needs: pip install duckdb. Run pipeline/build_db.py and analysis/01_neighbour_candidates.sql first."""
-import argparse, csv, json, time, duckdb
+import argparse, json, os, sys, time, duckdb
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from public_taxa import load_gate  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--db", default="data/shroomhunt.duckdb")
 ap.add_argument("--out", default="data/processed/dashboard.json")
 ap.add_argument("--meta", nargs="*", default=[], help="GBIF download .json files (for DOIs)")
 ap.add_argument("--redlist", default="data/raw/redlist/redlist_fungi_jp.json")
-ap.add_argument("--sensitive", default="data/reference/sensitive_species.csv")
+ap.add_argument("--mask", default="data/reference/taxon_mask.csv")
+ap.add_argument("--coverage", default="data/reference/redlist_coverage.csv")
+ap.add_argument("--exceptions", default="data/reference/match_exceptions.csv")
 a = ap.parse_args()
 
 c = duckdb.connect(a.db)
+# Shared protected-taxon gate (TASK-002): install before the neighbour SQL, which uses its tables.
+gate = load_gate(mask=a.mask, coverage=a.coverage, exceptions=a.exceptions, redlist=a.redlist)
+gate.install_sql(c)
 c.execute(open("analysis/01_neighbour_candidates.sql").read())
-
-# --- sensitive species keys -------------------------------------------------------------
-keys = set()
-try:
-    keys |= {str(s["speciesKey"]) for s in json.load(open(a.redlist))["species"] if s.get("speciesKey")}
-    redlist_n = len(json.load(open(a.redlist))["species"])
-except FileNotFoundError:
-    redlist_n = 0
-names = [r["scientific_name"] for r in csv.DictReader(open(a.sensitive))]
-c.execute("create or replace temp table sens_names(name varchar)")
-c.executemany("insert into sens_names values (?)", [(n,) for n in names])
-keys |= {r[0] for r in c.execute("select distinct speciesKey from jp where species in (select name from sens_names) and speciesKey is not null").fetchall()}
-c.execute("create or replace temp table sens(k varchar)")
-c.executemany("insert into sens values (?)", [(k,) for k in keys])
 
 one = lambda q: c.execute(q).fetchone()
 rows = lambda q: [list(r) for r in c.execute(q).fetchall()]
+public = gate.sql_where("jp")
+not_public = f"not {public}"
 
 totals = dict(zip(["records", "species", "genera", "families", "datasets", "georeferenced", "to_species"], one("""
   select count(*), count(distinct speciesKey), count(distinct genus), count(distinct family), count(distinct datasetKey),
          sum((decimalLatitude is not null)::int), sum((taxonRank in ('SPECIES','VARIETY','SUBSPECIES','FORM'))::int) from jp""")))
-totals["sensitive_species"] = one("select count(distinct speciesKey) from jp where speciesKey in (select k from sens)")[0]
-totals["sensitive_records"] = one("select count(*) from jp where speciesKey in (select k from sens)")[0]
-totals["redlist_names"] = redlist_n
+totals["sensitive_species"] = one(f"select count(distinct speciesKey) from jp where {not_public}")[0]
+totals["sensitive_records"] = one(f"select count(*) from jp where {not_public}")[0]
+totals["redlist_names"] = gate.redlist_names
 
 evidence = rows("select basisOfRecord, count(*) from jp group by 1 order by 2 desc, 1")
 id_depth = rows("""select case when taxonRank in ('SPECIES','VARIETY','SUBSPECIES','FORM') then 'species'
                                when taxonRank='GENUS' then 'genus' else 'higher' end d, count(*) from jp group by 1 order by 2 desc""")
 phyla = rows("select coalesce(phylum,'Unknown'), count(*), count(distinct speciesKey) from jp group by 1 order by 2 desc, 1 limit 8")
-decades = rows("""select (try_cast(year as int)//10)*10 dec, count(*) from jp where try_cast(year as int) between 1850 and 2100
-                  group by 1 order by 1""")
-families = rows("""select family, count(distinct speciesKey) sp, count(*) n from jp where family is not null
-                   group by 1 order by 2 desc, 1 limit 15""")
+decades = rows("""select (try_cast(year as int)//10)*10 as "dec", count(*) from jp
+                  where try_cast(year as int) between 1850 and 2100 group by 1 order by 1""")
+families = rows(f"""select family, count(distinct speciesKey) sp, count(*) n from jp
+                   where family is not null and {public} group by 1 order by 2 desc, 1 limit 15""")
 
 # JIS X 0410 2nd mesh (lat 5', lon 7.5'): code and centre. Sensitive species excluded.
-mesh = rows("""
+mesh = rows(f"""
   with p as (select try_cast(decimalLatitude as double) lat, try_cast(decimalLongitude as double) lon, speciesKey
-             from jp where decimalLatitude is not null and (speciesKey is null or speciesKey not in (select k from sens))),
+             from jp where decimalLatitude is not null and {public}),
   m as (select floor(lat*1.5) p1, floor(lon)-100 u1, floor((lat*1.5 - floor(lat*1.5))*8) q2,
                floor((lon - floor(lon))*8) v2, speciesKey from p where lat between 20 and 46 and lon between 122 and 154)
   select round((p1 + (q2+0.5)/8)/1.5, 4) clat, round(u1 + 100 + (v2+0.5)/8, 4) clon,
@@ -66,12 +62,12 @@ mesh = rows("""
   from m group by p1,u1,q2,v2 order by n desc, clat, clon""")
 
 leads = rows("""select species, family, neighbour_records, mo_records, triage_hint from neighbour_candidates
-                where mo_records > 0 and species not in (select name from sens_names)
-                order by neighbour_records desc, mo_records desc, species limit 60""")
+                where mo_records > 0 order by neighbour_records desc, mo_records desc, species limit 60""")
 lead_totals = dict(zip(["neighbour_only", "with_mo", "with_unresolved_jp_genus"], one("""
   select count(*), count(*) filter (where mo_records>0),
          count(*) filter (where mo_records>0 and triage_hint like 'Japanese%') from neighbour_candidates""")))
 unresolved = rows("""select genus, family, count(*) n from jp where taxonRank='GENUS' and genus is not null
+                     and lower(genus) not in (select genus from sens_genera)
                      group by 1,2 order by 3 desc, 1 limit 15""")
 mo_jp = one("select count(*) from jp where datasetKey='d714382d-5890-4234-ae81-696eeb53658a'")[0]
 
@@ -86,4 +82,6 @@ out = {"generated": time.strftime("%Y-%m-%d"), "totals": totals, "evidence": evi
        "sources": sources}
 json.dump(out, open(a.out, "w"), separators=(",", ":"), ensure_ascii=False)
 print(f"wrote {a.out}: {len(mesh)} mesh cells, {len(leads)} leads, "
-      f"{totals['sensitive_species']} sensitive species masked")
+      f"{totals['sensitive_records']} records masked/quarantined "
+      f"({one('select count(*) from jp where speciesKey::varchar in (select k from sens)')[0]} by Red List key), "
+      f"{totals['sensitive_species']} masked species")
