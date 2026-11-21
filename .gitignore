@@ -2,3 +2,7 @@ data/raw/
 data/processed/
 .DS_Store
 __pycache__/
+
+# Cross-session task handoff (coordination, not product)
+handoff/
+.venv/
