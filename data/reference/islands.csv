@@ -1,0 +1,29 @@
+id,name_en,name_ja,group_en,group_ja,lat_min,lat_max,lon_min,lon_max,prefecture,aliases
+okinawa-honto,Okinawa Island,沖縄本島,Okinawa Islands,沖縄諸島,26.07,26.88,127.63,128.33,Okinawa,okinawa-jima|okinawajima|okinawa island|okinawa honto|yanbaru|kunigami|naha|uruma|沖縄本島|やんばる|国頭|名護
+kume,Kumejima,久米島,Okinawa Islands,沖縄諸島,26.28,26.40,126.68,126.83,Okinawa,kumejima|kume-jima|kume island|久米島
+kerama,Kerama Islands,慶良間諸島,Okinawa Islands,沖縄諸島,26.10,26.30,127.18,127.42,Okinawa,kerama|tokashiki|zamami|aka-jima|慶良間|渡嘉敷|座間味
+iheya-izena,Iheya & Izena,伊平屋・伊是名,Okinawa Islands,沖縄諸島,26.88,27.08,127.88,128.02,Okinawa,iheya|izena|伊平屋|伊是名
+miyako,Miyako Islands,宮古諸島,Sakishima Islands,先島諸島,24.68,24.95,125.12,125.48,Okinawa,miyako|irabu|ikema|宮古|伊良部
+ishigaki,Ishigaki Island,石垣島,Yaeyama Islands,八重山諸島,24.30,24.62,124.05,124.35,Okinawa,ishigaki|石垣
+iriomote,Iriomote Island,西表島,Yaeyama Islands,八重山諸島,24.22,24.45,123.66,123.96,Okinawa,iriomote|西表
+yonaguni,Yonaguni Island,与那国島,Yaeyama Islands,八重山諸島,24.42,24.48,122.92,123.06,Okinawa,yonaguni|与那国
+hateruma,Hateruma Island,波照間島,Yaeyama Islands,八重山諸島,24.03,24.08,123.73,123.82,Okinawa,hateruma|波照間
+daito,Daito Islands,大東諸島,Daito Islands,大東諸島,24.40,26.00,131.15,131.35,Okinawa,daito|大東
+amami-oshima,Amami Oshima,奄美大島,Amami Islands,奄美群島,28.03,28.56,129.08,129.76,Kagoshima,amami|kakeroma|奄美|加計呂麻
+kikai,Kikaijima,喜界島,Amami Islands,奄美群島,28.26,28.36,129.91,130.05,Kagoshima,kikai|喜界
+tokunoshima,Tokunoshima,徳之島,Amami Islands,奄美群島,27.64,27.90,128.87,129.06,Kagoshima,tokunoshima|toku-no-shima|徳之島
+okinoerabu,Okinoerabujima,沖永良部島,Amami Islands,奄美群島,27.33,27.46,128.51,128.73,Kagoshima,okinoerabu|沖永良部
+yoron,Yoronjima,与論島,Amami Islands,奄美群島,26.99,27.07,128.38,128.46,Kagoshima,yoron|与論
+tokara,Tokara Islands,トカラ列島,Tokara Islands,トカラ列島,29.00,30.05,129.18,130.00,Kagoshima,tokara|nakanoshima|takarajima|トカラ|中之島|宝島
+yakushima,Yakushima,屋久島,Osumi Islands,大隅諸島,30.22,30.48,130.36,130.69,Kagoshima,yakushima|yaku-shima|屋久島
+tanegashima,Tanegashima,種子島,Osumi Islands,大隅諸島,30.32,30.86,130.84,131.09,Kagoshima,tanegashima|種子島
+ogasawara,Ogasawara (Bonin) Islands,小笠原諸島,Ogasawara Islands,小笠原諸島,24.00,27.80,141.90,142.35,Tokyo,ogasawara|bonin|chichijima|hahajima|小笠原|父島|母島
+izu,Izu Islands,伊豆諸島,Izu Islands,伊豆諸島,32.40,34.82,139.15,140.00,Tokyo,izu-oshima|izu oshima|hachijo|miyake-jima|miyakejima|niijima|kozushima|mikurajima|伊豆大島|八丈|三宅島|新島|神津島|御蔵島
+tsushima,Tsushima,対馬,Tsushima & Iki,対馬・壱岐,34.08,34.72,129.15,129.52,Nagasaki,tsushima|対馬
+iki,Iki,壱岐,Tsushima & Iki,対馬・壱岐,33.72,33.87,129.64,129.80,Nagasaki,iki-shima|ikishima|壱岐
+goto,Goto Islands,五島列島,Goto Islands,五島列島,32.55,33.30,128.55,129.20,Nagasaki,goto|fukue|nakadori|五島|福江|中通島
+sado,Sado Island,佐渡島,Sado,佐渡,37.79,38.35,138.19,138.58,Niigata,sado|佐渡
+oki,Oki Islands,隠岐諸島,Oki Islands,隠岐諸島,35.95,36.36,132.95,133.41,Shimane,oki islands|dogo|隠岐
+awaji,Awaji Island,淡路島,Seto Inland Sea,瀬戸内海,34.15,34.62,134.66,135.03,Hyogo,awaji|淡路
+rishiri-rebun,Rishiri & Rebun,利尻・礼文,Hokkaido islands,北海道の島,45.05,45.48,140.95,141.36,Hokkaido,rishiri|rebun|利尻|礼文
+okushiri,Okushiri Island,奥尻島,Hokkaido islands,北海道の島,42.04,42.26,139.39,139.56,Hokkaido,okushiri|奥尻

@@ -31,12 +31,17 @@ jobs:
         env: { GH_TOKEN: "${{ github.token }}" }
         run: python3 pipeline/fetch_latest_release_assets.py "${{ github.repository }}"
 
-      - name: Build database and dashboard summary
+      - name: Build database, dashboard summary and area drill-down files
         run: |
-          python3 pipeline/build_db.py data/raw/gbif/japan/*.csv data/raw/gbif/neighbours/*.csv data/raw/gbif/mushroomobserver/*.csv data/shroomhunt.duckdb
+          extra=""
+          [ -f data/raw/gbif/japan_dwca/occurrence.txt ] && extra="$extra --japan-dwca data/raw/gbif/japan_dwca/occurrence.txt"
+          ea=$(ls data/raw/gbif/eastasia_cells/* 2>/dev/null | head -1)
+          [ -n "$ea" ] && extra="$extra --eastasia $ea"
+          python3 pipeline/build_db.py --japan data/raw/gbif/japan/*.csv --neighbours data/raw/gbif/neighbours/*.csv \
+            --mo data/raw/gbif/mushroomobserver/*.csv --db data/shroomhunt.duckdb $extra
           python3 pipeline/build_dashboard_data.py --out dashboard.json \
-            --meta data/raw/gbif/japan_*.json data/raw/gbif/neighbours_*.json data/raw/gbif/mushroomobserver_*.json \
-            --redlist data/raw/redlist/redlist_fungi_jp.json
+            --meta $(ls data/raw/gbif/*.json) --redlist data/raw/redlist/redlist_fungi_jp.json
+          python3 pipeline/build_areas.py --out areas --redlist data/raw/redlist/redlist_fungi_jp.json
 
       - name: Open pull request on Bio_HP
         env:
@@ -46,12 +51,14 @@ jobs:
           git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/davidklan-png/Bio_HP.git" site
           mkdir -p site/assets/data/shroomhunt
           cp dashboard.json site/assets/data/shroomhunt/dashboard.json
+          rm -rf site/assets/data/shroomhunt/areas && cp -r areas site/assets/data/shroomhunt/areas
           cd site
-          if git diff --quiet; then echo "Dashboard data unchanged"; exit 0; fi
+          git add -A assets/data/shroomhunt
+          if git diff --cached --quiet; then echo "Dashboard data unchanged"; exit 0; fi
           branch="data/shroomhunt-$(date -u +%Y%m%d-%H%M)"
           git checkout -b "$branch"
           git -c user.name="ShroomHunt bot" -c user.email="davidklan-png@users.noreply.github.com" \
-            commit -am "Update Japan fungi dashboard data ($(date -u +%Y-%m-%d))"
+            commit -m "Update Japan fungi dashboard data ($(date -u +%Y-%m-%d))"
           git push -u origin "$branch"
           body=$(python3 -c "import json;d=json.load(open('assets/data/shroomhunt/dashboard.json'));t=d['totals'];print(f\"Records: {t['records']:,} · species: {t['species']:,} · leads: {d['lead_totals']['with_mo']:,} · sensitive species masked: {t['sensitive_species']}\\n\\nSources:\\n\"+'\\n'.join('- https://doi.org/'+s['doi'] for s in d['sources']))")
           gh pr create --repo davidklan-png/Bio_HP --base main --head "$branch" \
