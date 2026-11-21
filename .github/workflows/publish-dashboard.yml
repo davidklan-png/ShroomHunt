@@ -15,6 +15,10 @@ on:
         description: "Open the Bio_HP data PR (paused until Phase 1C output validation exists)"
         type: boolean
         default: false
+      geography_only:
+        description: "Build only japan-outline.json (reference geography): no occurrence fetch, no DuckDB"
+        type: boolean
+        default: false
   workflow_run:
     workflows: ["Fetch data"]
     types: [completed]
@@ -34,14 +38,17 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: pip install duckdb==1.1.3
+        if: ${{ inputs.geography_only != true }}
 
       - name: Download newest data releases
+        if: ${{ inputs.geography_only != true }}
         env:
           GH_TOKEN: ${{ secrets.STAGING_TOKEN }}
           STAGING_REPO: ${{ vars.STAGING_REPO }}
         run: python3 pipeline/fetch_latest_release_assets.py
 
       - name: Build database, dashboard summary and area drill-down files
+        if: ${{ inputs.geography_only != true }}
         run: |
           extra=""
           [ -f data/raw/gbif/japan_dwca/occurrence.txt ] && extra="$extra --japan-dwca data/raw/gbif/japan_dwca/occurrence.txt"
@@ -53,31 +60,49 @@ jobs:
             --meta $(ls data/raw/gbif/*.json) --redlist data/raw/redlist/redlist_fungi_jp.json
           python3 pipeline/build_areas.py --out areas --redlist data/raw/redlist/redlist_fungi_jp.json
 
+      - name: Build reference geography (geography_only)
+        if: ${{ inputs.geography_only == true }}
+        run: python3 pipeline/build_map_reference.py --out japan-outline.json
+
       - name: Open pull request on Bio_HP
         if: ${{ inputs.enable_public_pr == true }}
         env:
           GH_TOKEN: ${{ secrets.BIO_HP_TOKEN }}
+          GEOGRAPHY_ONLY: ${{ inputs.geography_only }}
         run: |
           [ -n "$GH_TOKEN" ] || { echo "::error::Secret BIO_HP_TOKEN is not set (see top of this file)"; exit 1; }
           git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/davidklan-png/Bio_HP.git" site
           mkdir -p site/assets/data/shroomhunt
-          cp dashboard.json site/assets/data/shroomhunt/dashboard.json
-          rm -rf site/assets/data/shroomhunt/areas && cp -r areas site/assets/data/shroomhunt/areas
+          if [ "$GEOGRAPHY_ONLY" = "true" ]; then
+            cp japan-outline.json site/assets/data/shroomhunt/japan-outline.json
+            title="Update Japan reference geography"
+            body=$(python3 -c "import json;d=json.load(open('site/assets/data/shroomhunt/japan-outline.json'));v=sum(len(r) for p in d['land'] for r in p);print(f\"Reference geography: Natural Earth {d['source']['release']} · {len(d['land'])} land polygons · {v:,} vertices · {len(d['places'])} places\\n\\nSource: {d['source']['url']}\")")
+          else
+            cp dashboard.json site/assets/data/shroomhunt/dashboard.json
+            rm -rf site/assets/data/shroomhunt/areas && cp -r areas site/assets/data/shroomhunt/areas
+            title="Update Japan fungi dashboard data"
+            body=$(python3 -c "import json;d=json.load(open('assets/data/shroomhunt/dashboard.json'));t=d['totals'];print(f\"Records: {t['records']:,} · species: {t['species']:,} · leads: {d['lead_totals']['with_mo']:,} · sensitive species masked: {t['sensitive_species']}\\n\\nSources:\\n\"+'\\n'.join('- https://doi.org/'+s['doi'] for s in d['sources']))")
+          fi
           cd site
           git add -A assets/data/shroomhunt
-          if git diff --cached --quiet; then echo "Dashboard data unchanged"; exit 0; fi
+          if git diff --cached --quiet; then echo "Staged data unchanged; no PR needed"; exit 0; fi
           branch="data/shroomhunt-$(date -u +%Y%m%d-%H%M)"
           git checkout -b "$branch"
           git -c user.name="ShroomHunt bot" -c user.email="davidklan-png@users.noreply.github.com" \
-            commit -m "Update Japan fungi dashboard data ($(date -u +%Y-%m-%d))"
+            commit -m "$title ($(date -u +%Y-%m-%d))"
           git push -u origin "$branch"
-          body=$(python3 -c "import json;d=json.load(open('assets/data/shroomhunt/dashboard.json'));t=d['totals'];print(f\"Records: {t['records']:,} · species: {t['species']:,} · leads: {d['lead_totals']['with_mo']:,} · sensitive species masked: {t['sensitive_species']}\\n\\nSources:\\n\"+'\\n'.join('- https://doi.org/'+s['doi'] for s in d['sources']))")
           gh pr create --repo davidklan-png/Bio_HP --base main --head "$branch" \
-            --title "Update Japan fungi dashboard data" --body "$body"
+            --title "$title" --body "$body"
 
       - name: Public data PR is paused
         if: ${{ inputs.enable_public_pr != true }}
+        env:
+          GEOGRAPHY_ONLY: ${{ inputs.geography_only }}
         run: |
           echo "### Bio_HP data PR not opened" >> "$GITHUB_STEP_SUMMARY"
-          echo "The occurrence publish path is paused until Phase 1C output validation exists" \
-               "(docs/map-improvement-plan.md §5). Re-run with enable_public_pr=true to override after review." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$GEOGRAPHY_ONLY" = "true" ]; then
+            echo "Reference geography built; the Bio_HP PR still needs enable_public_pr=true." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "The occurrence publish path is paused until Phase 1C output validation exists" \
+                 "(docs/map-improvement-plan.md §5). Re-run with enable_public_pr=true to override after review." >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -1,0 +1,18 @@
+# Curated bilingual reference anchors for the map (TASK-003, plan §6 MapReference.places).
+# aliases: pipe-separated; folded case/diacritic-insensitively by the later place search.
+# area_id: only where a current areas/index.json id clearly matches (islands.csv id); blank otherwise.
+en,ja,aliases,lon,lat,area_id
+Hokkaidō,北海道,hokkaido|北海道,142.9,43.42,
+Honshū,本州,honshu|本州,138.5,36.5,
+Kyūshū,九州,kyushu|九州,130.8,32.8,
+Shikoku,四国,shikoku|四国,133.4,33.85,
+Okinawa Hontō,沖縄本島,okinawa|okinawa island|okinawa honto|okinawa jima,127.9,26.5,okinawa-honto
+Amami Ōshima,奄美大島,amami|amami oshima|amami-oshima,129.4,28.3,amami-oshima
+Naha,那覇,naha|ナハ,127.68,26.21,okinawa-honto
+Yanbaru,やんばる,yanbaru|山原|kunigami,128.2,26.7,okinawa-honto
+Ishigaki,石垣島,ishigaki|ishigaki island|石垣,124.2,24.4,ishigaki
+Iriomote,西表島,iriomote|iriomote island|西表,123.85,24.33,iriomote
+Miyako,宮古島,miyako|miyako islands|宮古,125.28,24.78,miyako
+Yonaguni,与那国島,yonaguni|与那国,122.99,24.45,yonaguni
+Yakushima,屋久島,yakushima|yaku island|屋久,130.55,30.34,yakushima
+Ogasawara,小笠原諸島,ogasawara|bonin islands|小笠原,142.2,27.05,ogasawara
