@@ -53,7 +53,7 @@ jobs:
         if: ${{ inputs.geography_only != true }}
         env:
           GH_TOKEN: ${{ secrets.STAGING_TOKEN }}
-          STAGING_REPO: ${{ vars.STAGING_REPO }}
+          STAGING_REPO: ${{ vars.STAGING_REPO || secrets.STAGING_REPO }}
         run: python3 pipeline/fetch_latest_release_assets.py
 
       - name: Build database and the v1 occurrence bundle into staging
@@ -68,6 +68,15 @@ jobs:
           python3 pipeline/build_dashboard_data.py --out staging/dashboard.json \
             --meta $(ls data/raw/gbif/*.json) --redlist data/raw/redlist/redlist_fungi_jp.json
           python3 pipeline/build_areas.py --out staging/areas --redlist data/raw/redlist/redlist_fungi_jp.json
+
+      - name: Build research payload and stamp the bundle
+        # §5 row 3A: mesh-research.json always joins the staging bundle when occurrence
+        # data is built (the validator accepts it, and the genus allowlist seed keeps
+        # genera [] until reviewed); snapshot.py stamps last, research included.
+        if: ${{ inputs.geography_only != true }}
+        run: |
+          python3 pipeline/build_mesh_research.py --out staging/mesh-research.json \
+            --redlist data/raw/redlist/redlist_fungi_jp.json
           python3 pipeline/snapshot.py staging
 
       - name: Build reference geography into staging (geography_only)
