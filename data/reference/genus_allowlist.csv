@@ -1,0 +1,9 @@
+# UNREVIEWED SEED — empty by design (TASK-007, plan §7 "Reviewed genus search").
+# David + taxon reviewer must populate one row per approved genus before the
+# genus search ships anything: the review is David's sign-off, never generated.
+# A genus listed here is published with the leaf areas where it has >=10
+# eligible genus-rank records across >=3 cells and >=3 independent sampling
+# events per area (pipeline/build_mesh_research.py). An absent or empty
+# (unreviewed) file builds the research slices normally and ships genera: []
+# with a stderr warning.
+genus,note
