@@ -42,8 +42,10 @@ Definitions this module owns (§7 gates the dashboard UI trusts):
   Per genus: ≥10 eligible genus-rank records across ≥3 cells; per listed leaf
   area (island/tile via the islands.csv priority order, groups never) ≥3
   independent events. Each surviving row ships its names as the optional
-  third element [label_en, label_ja, *aliases] (empty ones dropped); masked
-  genera are dropped regardless of the table. An absent or header-only
+  third element [label_en, label_ja, *aliases] (empty ones dropped). Masking
+  is species-level only (David's ruling 2026-11-22): a genus row is built from
+  eligible records after its protected species were individually masked, so
+  no genus is excluded by name. An absent or header-only
   (unreviewed) table ships genera: [] with a stderr warning while the slices
   still build.
 
@@ -203,7 +205,7 @@ if a.genera_allowlist:
     print("mesh-research: --genera-allowlist is a deprecated no-op; the reviewed name table is "
           "--taxon-names", file=sys.stderr)
 listed = read_taxon_names(a.taxon_names)
-genera, dropped_genera = [], {"support": 0, "masked": 0}
+genera, dropped_genera = [], {"support": 0}
 if not listed:
     print(f"mesh-research: genus search disabled — taxon name table absent or unreviewed "
           f"({a.taxon_names}); genera stays [] until David's review populates it", file=sys.stderr)
@@ -222,9 +224,6 @@ else:
     for g, names in listed:
         by_genus.setdefault(g.lower(), (g, names))
     for g, names in sorted(by_genus.values()):
-        if gate.classify(genus=g, taxon_rank="GENUS"):
-            dropped_genera["masked"] += 1
-            continue
         hits = genus_hits.get(g.lower(), [])
         if len(hits) < GENUS_MIN_RECORDS or len({cell for cell, _ in hits}) < GENUS_MIN_CELLS:
             dropped_genera["support"] += 1

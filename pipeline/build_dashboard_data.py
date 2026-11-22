@@ -81,8 +81,7 @@ lead_totals = dict(zip(["neighbour_only", "with_mo", "with_unresolved_jp_genus"]
   select count(*), count(*) filter (where mo_records>0),
          count(*) filter (where mo_records>0 and triage_hint like 'Japanese%') from neighbour_candidates""")))
 unresolved = rows("""select genus, family, count(*) n from jp where taxonRank='GENUS' and genus is not null
-                     and lower(genus) not in (select genus from sens_genera)
-                     group by 1,2 order by 3 desc, 1 limit 15""")
+                     group by 1,2 order by 3 desc, 1 limit 15""")  # genus names publish (species-only masking)
 mo_jp = one("select count(*) from jp where datasetKey='d714382d-5890-4234-ae81-696eeb53658a'")[0]
 
 sources = []

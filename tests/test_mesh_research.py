@@ -200,13 +200,17 @@ class MeshResearch(unittest.TestCase):
         self.assertNotIn((8, "all"), self.sm)                  # nothing supported in month 8
         self.assertNotIn(T1, self.sm[(0, "all")])              # month-0 'all' suppresses the cell...
         self.assertIn(T1, self.sm[(0, "m")])                   # ...while month-0 of its kind keeps it
+        # the three genus-search fixture cells (Allowus/Rarus/Evencus/Matsutakus rows
+        # at 26.0/26.1/26.25) are public records now that masking is species-only,
+        # so they join month-0 'all' alongside the slice fixtures
         self.assertEqual(set(self.sm[(0, "all")]),
-                         {A, D, MU, V, PAUCIUS_CELL, *E_KEYS, *S_KEYS})
+                         {A, D, MU, V, PAUCIUS_CELL, "360:1030", "361:1030", "363:1030", *E_KEYS, *S_KEYS})
 
     def test_genera_gates_from_both_sides(self):
         self.assertEqual(self.doc["genera"], [["Allowus", ["okisle"],
-                                               ["allowus", "アロウス", "al", "アロウス属"]]])
-        self.assertIn("genera dropped: {'support': 3, 'masked': 1}", self.last_run.stdout)
+                                               ["allowus", "アロウス", "al", "アロウス属"]],
+                                              ["Matsutakus", ["t4528"], []]])  # per-area event gate keeps only the tile with >=3 events
+        self.assertIn("genera dropped: {'support': 3}", self.last_run.stdout)
 
     def test_deterministic_bytes(self):
         with open(self.build(), "rb") as f:

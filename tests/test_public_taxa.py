@@ -66,15 +66,18 @@ class GateBehaviour(unittest.TestCase):
     def test_match_exception_alias_masks(self):
         self.assertEqual(self.gate.classify(species="Boletus fictus"), "name")
 
-    def test_genus_only_row_in_masked_genus_quarantined(self):
-        self.assertEqual(self.gate.classify(genus="Matsutakus", taxon_rank="GENUS"), "genus_only")
+    def test_genus_only_rows_publish_species_masking_only(self):
+        # David's ruling 2026-11-22: only the species in question masks; a genus-rank
+        # record or another species of the same genus is public.
+        self.assertIsNone(self.gate.classify(genus="Matsutakus", taxon_rank="GENUS"))
         self.assertIsNone(self.gate.classify(genus="Cleanus", taxon_rank="GENUS"))
-        # a fully identified different species of a masked genus is public
         self.assertIsNone(self.gate.classify(species="Matsutakus publicus", species_key=555,
                                              genus="Matsutakus", taxon_rank="SPECIES"))
-        # rank None is quarantined like sql_where() does, not treated as species rank
-        self.assertEqual(self.gate.classify(species="Matsutakus publicus", species_key=555,
-                                            genus="Matsutakus", taxon_rank=None), "genus_only")
+        self.assertIsNone(self.gate.classify(species="Matsutakus publicus", species_key=555,
+                                             genus="Matsutakus", taxon_rank=None))
+        # the masked binomial's own infraspecific form still masks by name
+        self.assertEqual(self.gate.classify(species="Matsutakus fictus var. mira",
+                                            genus="Matsutakus", taxon_rank="VARIETY"), "name")
 
     def test_audit_counts_are_aggregate_only(self):
         rows = [("Matsutakus fictus", "7001", "Matsutakus", "SPECIES"),
@@ -84,8 +87,8 @@ class GateBehaviour(unittest.TestCase):
                 ("Dubius ambiguus", None, "Dubius", "SPECIES"),
                 ("Publicus bonum", "7002", "Publicus", "SPECIES")]
         counts = self.gate.audit(rows)
-        self.assertEqual(counts, {"public": 1, "masked_key": 1, "masked_name": 2,
-                                  "quarantined_ambiguous": 1, "quarantined_genus_only": 1})
+        self.assertEqual(counts, {"public": 2, "masked_key": 1, "masked_name": 2,
+                                  "quarantined_ambiguous": 1})  # genus-rank row now public
         self.assertTrue(all(isinstance(k, str) and isinstance(v, int) for k, v in counts.items()))
 
 

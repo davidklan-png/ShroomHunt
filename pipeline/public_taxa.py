@@ -100,7 +100,12 @@ class Gate:
                 self._binomials.setdefault(n.split()[0], set()).add(n)
 
     def classify(self, species=None, species_key=None, genus=None, taxon_rank=None):
-        """Why this record is masked: 'key', 'name', 'ambiguous', 'genus_only', or None if public."""
+        """Why this record is masked: 'key', 'name', 'ambiguous', or None if public.
+
+        Species-level masking only (David's ruling, 2026-11-22): a record masks when
+        it IS the protected taxon (key, name/alias, ambiguous match, or an
+        infraspecific form of a masked binomial). Genus-rank records publish —
+        masking a whole genus for one protected species was rejected."""
         if species_key is not None and str(species_key) in self.keys:
             return "key"
         n = _fold(species)
@@ -109,13 +114,8 @@ class Gate:
                 return "name"
             if n in self.ambiguous_names:
                 return "ambiguous"
-        # Rank None is not species rank: quarantine in a masked genus, exactly like sql_where().
-        to_species = bool(n) and taxon_rank in SPECIES_RANKS
-        g = _fold(genus) or (n.split()[0] if n else "")
-        if g in self.masked_genera:
-            if not to_species:
-                return "genus_only"
-            if n and any(n.startswith(b + " ") for b in self._binomials.get(g, ())):
+            g = _fold(genus) or n.split()[0]
+            if any(n.startswith(b + " ") for b in self._binomials.get(g, ())):
                 return "name"  # infraspecific/null-key form of a masked binomial
         return None
 
@@ -124,13 +124,12 @@ class Gate:
 
     def audit(self, rows):
         """Aggregate counts for (species, key, genus, rank) tuples. No taxon names."""
-        counts = {"public": 0, "masked_key": 0, "masked_name": 0,
-                  "quarantined_ambiguous": 0, "quarantined_genus_only": 0}
+        counts = {"public": 0, "masked_key": 0, "masked_name": 0, "quarantined_ambiguous": 0}
         for species, key, genus, rank in rows:
             reason = self.classify(species, key, genus, rank)
             counts["public" if reason is None else
                    {"key": "masked_key", "name": "masked_name",
-                    "ambiguous": "quarantined_ambiguous", "genus_only": "quarantined_genus_only"}[reason]] += 1
+                    "ambiguous": "quarantined_ambiguous"}[reason]] += 1
         return counts
 
     def install_sql(self, con):
@@ -140,22 +139,16 @@ class Gate:
         con.execute("create or replace temp table sens_names(name varchar)")
         names = sorted(self.masked_names | self.ambiguous_names)
         con.executemany("insert into sens_names values (?)", [(n,) for n in names])
-        con.execute("create or replace temp table sens_genera(genus varchar)")
-        con.executemany("insert into sens_genera values (?)", [(g,) for g in sorted(self.masked_genera)])
         con.execute("create or replace temp table sens_prefix(name varchar)")
         prefixes = sorted(n for bs in self._binomials.values() for n in bs)
         con.executemany("insert into sens_prefix values (?)", [(p,) for p in prefixes])
 
     def sql_where(self, t="jp"):
         """SQL predicate over a table/alias with speciesKey/species/genus/taxonRank columns."""
-        sr = ",".join(f"'{r}'" for r in SPECIES_RANKS)
         return (f"(coalesce({t}.speciesKey::varchar, '') not in (select k from sens)"
                 f" and lower(coalesce({t}.species, '')) not in (select name from sens_names)"
-                f" and not (lower(coalesce({t}.genus, '')) in (select genus from sens_genera)"
-                f"      and ({t}.taxonRank is null or {t}.taxonRank not in ({sr}) or {t}.species is null))"
-                f" and not (lower(coalesce({t}.genus, '')) in (select genus from sens_genera)"
-                f"      and exists (select 1 from sens_prefix p"
-                f"                   where lower(coalesce({t}.species, '')) like p.name || ' %')))")
+                f" and not exists (select 1 from sens_prefix p"
+                f"                 where lower(coalesce({t}.species, '')) like p.name || ' %'))")  # noqa: F541
 
 
 def load_gate(mask="data/reference/taxon_mask.csv", coverage="data/reference/redlist_coverage.csv",

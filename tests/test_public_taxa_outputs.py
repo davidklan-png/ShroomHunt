@@ -50,8 +50,8 @@ EA_ROWS = [("7009", "Nearby candidatus", "Candidaceae", 26.0, 127.0, 6, 3),
            ("9002", "Dubius ambiguus", "Dubiaceae", 25.0, 126.0, 5, 2),
            (None, "Boletus fictus", "Fictaceae", 25.5, 126.5, 4, 1)]
 
-MASKED_JP = 6          # rows 1, 2, 4, 5, 6, 7 above
-PUBLIC_MESH_RECORDS = 2  # Publicus bonum + the Cleanus genus-only row, both in cell 26.50/127.90
+MASKED_JP = 5          # rows 1, 2, 5, 6, 7 (row 4, genus-rank Matsutakus, publishes now)
+PUBLIC_MESH_RECORDS = 3  # Publicus bonum + Cleanus + Matsutakus genus-rank rows (species-only masking)
 
 
 def run_builder(script, *args):
@@ -101,11 +101,14 @@ class GatedOutputs(unittest.TestCase):
         self.assertEqual(c.execute("select count(*) from jp where genus='Matsutakus' and taxonRank='GENUS'").fetchone()[0], 1)
         c.close()
 
-    def test_mesh_excludes_masked_records_and_genus_only_cells(self):
+    def test_mesh_excludes_masked_species_not_genus_rows(self):
         mesh = self.out["mesh"]
-        self.assertEqual(len(mesh), 1)                       # cells holding only masked rows are gone
-        self.assertEqual(mesh[0][2], PUBLIC_MESH_RECORDS)   # records
-        self.assertEqual(mesh[0][3], 1)                      # distinct species (Publicus bonum)
+        self.assertEqual(len(mesh), 2)                       # masked-only-species cells gone; genus-rank cells stay
+        by_key = {f"{m[0]:.4f}": m for m in mesh}
+        main = next(m for m in mesh if m[2] == 2)            # Publicus + Cleanus genus row
+        other = next(m for m in mesh if m[2] == 1)           # Matsutakus genus row alone in its cell
+        self.assertEqual(main[3], 1)                         # distinct species (Publicus bonum)
+        self.assertEqual(other[3], 0)                        # genus-rank rows carry no species
 
     def test_families_exclude_families_of_only_masked_species(self):
         fams = [f[0] for f in self.out["families"]]
@@ -113,14 +116,15 @@ class GatedOutputs(unittest.TestCase):
         self.assertNotIn("Rareaceae", fams)
         self.assertNotIn("Dubiaceae", fams)
         fict = next(f for f in self.out["families"] if f[0] == "Fictaceae")
-        self.assertEqual(fict[1:], [1, PUBLIC_MESH_RECORDS])  # species, records
+        self.assertEqual(fict[1:], [1, PUBLIC_MESH_RECORDS])  # species, records (3 incl. genus-rank rows)
 
     def test_national_leads_exclude_masked_and_ambiguous(self):
         self.assertEqual({l[0] for l in self.out["leads"]}, {"Nearby candidatus"})
         self.assertEqual(self.out["lead_totals"]["with_mo"], 1)
 
-    def test_unresolved_genera_exclude_masked_genera(self):
-        self.assertEqual([g[0] for g in self.out["unresolved_genera"]], ["Cleanus"])
+    def test_unresolved_genera_publish_genus_names(self):
+        # species-only masking: Matsutakus publishes alongside Cleanus
+        self.assertEqual([g[0] for g in self.out["unresolved_genera"]], ["Cleanus", "Matsutakus"])
 
     def test_dashboard_totals_stay_nationwide_aggregates(self):
         self.assertEqual(self.out["totals"]["sensitive_records"], MASKED_JP)
@@ -141,7 +145,7 @@ class GatedOutputs(unittest.TestCase):
 
     def test_index_reports_masked_aggregate_and_public_cells_only(self):
         self.assertEqual(self.index["masked_records"], MASKED_JP)
-        self.assertEqual(self.index["cells"], {"318:1023": "testisle"})
+        self.assertEqual(self.index["cells"], {"318:1023": "testisle", "319:1024": "testisle"})
 
 
 class BuildersFailClosed(unittest.TestCase):
