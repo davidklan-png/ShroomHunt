@@ -27,15 +27,18 @@ Definitions this module owns (§7 gates the dashboard UI trusts):
 * Genus share: the two sides are the taxonRank='GENUS' records and the rest.
   Both sides need ≥5 observations, else genus_share_band is null (count band
   may still ship).
-* Complementary suppression (conservative, documented pass): for kind 'all',
-  a cell withheld from any single-month slice — it had records there below
-  support, or --previous dropped it there — is also dropped from the month-0
-  'all' slice, so a withheld small slice cannot be recovered by subtracting
-  published months from the all-months cell total against the area tables.
+* Complementary suppression: a cell is dropped from month 0 of a kind (the
+  rule is uniform across all/m/l/o) when at least 10 of that kind's 12
+  single-month slices publish it. Ten-plus published months leave at most two
+  unknown months (plus monthless records) in the all-months total, and with
+  count bands five wide, differencing published months against it bounds the
+  remainder tightly enough to isolate a small group. Fewer published months
+  leave the remainder spread too thin to difference, so the cell ships.
 * --previous mesh-research.json: a cell whose count or share band differs
   from that published file is omitted from that slice entirely (holding both
-  files must not narrow either range), and a single-month 'all' omission
-  cascades into month 0 as above.
+  files must not narrow either range). These drops happen before the month-0
+  suppression count, so a previous-dropped month no longer counts as
+  published for the 10-of-12 threshold.
 * Genus search list: only genera on the reviewed name table
   (data/reference/taxon_names.csv, columns genus,label_en,label_ja,aliases —
   David's review maintains it; the rows are the plan §7 genus-search gate).
@@ -148,12 +151,11 @@ def count_band(n):
     return 4 if n >= 250 else sum(n >= e for e in COUNT_EDGES) - 1
 
 # ---------- support gate ------------------------------------------------------------------------
-published, withheld = {}, defaultdict(set)   # withheld: cell key -> single months with no public 'all' estimate
+published = {}
 for (m, k), cells_ in slices.items():
     out = {}
     for cell, (n, events, gn) in cells_.items():
         if n < MIN_RECORDS or len(events) < MIN_EVENTS:
-            if k == "all" and m >= 1: withheld[cell_key(*cell)].add(m)   # records existed, estimate withheld
             continue
         ng = n - gn
         out[cell_key(*cell)] = [count_band(n),
@@ -173,15 +175,19 @@ if a.previous:
             if was is not None and tuple(was) != tuple(published[sk][key]):
                 del published[sk][key]
                 moved += 1
-                if sk[1] == "all" and sk[0] >= 1: withheld[key].add(sk[0])
 
-# ---------- complementary suppression: month 0 of kind 'all' -----------------------------------
+# ---------- complementary suppression: month 0 (isolation threshold 10 of 12) ------------------
 suppressed = 0
-if withheld and (0, "all") in published:
-    for key in [k for k in published[(0, "all")] if k in withheld]:
-        del published[(0, "all")][key]
+for k in KIND_ORDER:
+    if (0, k) not in published: continue
+    pub_months = defaultdict(int)          # cell -> single-month slices of kind k that publish it
+    for (m, kk), cells_ in published.items():
+        if kk == k and 1 <= m <= 12:
+            for key in cells_: pub_months[key] += 1
+    for key in [key for key in published[(0, k)] if pub_months[key] >= 10]:
+        del published[(0, k)][key]         # <=2 unknown months against 5-wide bands: boundable, so withhold
         suppressed += 1
-    if not published[(0, "all")]: del published[(0, "all")]
+    if not published[(0, k)]: del published[(0, k)]
 
 # ---------- reviewed genus search list -----------------------------------------------------------
 def read_taxon_names(path):
@@ -244,5 +250,5 @@ write_json(a.out, {"schema_version": 1, "snapshot": "", "slices": slices_out, "g
 prev_note = f", {moved} cell slice(s) dropped against {os.path.basename(a.previous)}" if a.previous else ""
 print(f"wrote {a.out}: {len(slices_out)} slices, {sum(len(s[2]) for s in slices_out)} cell entries, "
       f"{len(genera)} genera; dedupe key {DEDUP or 'none'} skipped {dupes} duplicate source records")
-print(f"gate audit (aggregate): {audit}; suppression: {suppressed} cell(s) dropped from month-0 'all'"
+print(f"gate audit (aggregate): {audit}; suppression: {suppressed} cell(s) dropped from month 0"
       f"{prev_note}; genera dropped: {dropped_genera}")

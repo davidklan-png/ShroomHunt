@@ -62,7 +62,8 @@ def fixture_rows():
     rows += [rec(f"B{i}", 26.2, 127.7, 5, f"e{i % 3 + 1}") for i in range(9)]
     rows += [rec(f"C{i}", 26.3, 127.7, 5, f"e{i % 2 + 1}") for i in range(10)]
     rows += [rec(f"D{i}", 26.4, 127.7, 5, f"e{i % 3 + 1}") for i in range(10)]
-    # T1: month 7 supported, month 8 below support -> month-0 'all' suppressed, month-0 'm' kept
+    # T1: month 7 supported, month 8 below support -> month 0 keeps the cell
+    # (one published month: the remainder spans 11 months, differencing cannot isolate it)
     rows += [rec(f"T7{i}", 26.45, 127.9, 7, f"e{i % 3 + 1}") for i in range(12)]
     rows += [rec(f"T8{i}", 26.45, 127.9, 8, f"e{i % 3 + 1}") for i in range(9)]
     # MU: 11 records with unknown month -> month-0 slices only
@@ -195,16 +196,16 @@ class MeshResearch(unittest.TestCase):
             if m >= 1:
                 self.assertNotIn(MU, cells)
 
-    def test_complementary_suppression_drops_month0_all_only(self):
+    def test_month0_keeps_cells_with_few_published_months(self):
         self.assertIn(T1, self.sm[(7, "all")])                 # the supported month ships
         self.assertNotIn((8, "all"), self.sm)                  # nothing supported in month 8
-        self.assertNotIn(T1, self.sm[(0, "all")])              # month-0 'all' suppresses the cell...
-        self.assertIn(T1, self.sm[(0, "m")])                   # ...while month-0 of its kind keeps it
+        self.assertIn(T1, self.sm[(0, "all")])                 # one published month leaves the remainder
+        self.assertIn(T1, self.sm[(0, "m")])                   # unboundable: month 0 keeps the cell
         # the three genus-search fixture cells (Allowus/Rarus/Evencus/Matsutakus rows
         # at 26.0/26.1/26.25) are public records now that masking is species-only,
         # so they join month-0 'all' alongside the slice fixtures
         self.assertEqual(set(self.sm[(0, "all")]),
-                         {A, D, MU, V, PAUCIUS_CELL, "360:1030", "361:1030", "363:1030", *E_KEYS, *S_KEYS})
+                         {A, D, T1, MU, V, PAUCIUS_CELL, "360:1030", "361:1030", "363:1030", *E_KEYS, *S_KEYS})
 
     def test_genera_gates_from_both_sides(self):
         self.assertEqual(self.doc["genera"], [["Allowus", ["okisle"],
@@ -228,7 +229,8 @@ class MeshResearch(unittest.TestCase):
             sm = slice_map(json.load(f))
         self.assertNotIn(D, sm[(5, "all")])                    # band moved vs the previous file: withheld
         self.assertIn(D, sm[(5, "m")])                         # kind slices keep it
-        self.assertNotIn(D, sm[(0, "all")])                    # and the month-0 cascade drops it
+        self.assertIn(D, sm[(0, "all")])                       # D publishes in a single month only, so even
+                                                              # after the drop the remainder is unboundable
         self.assertIn(T1, sm[(7, "all")])                      # unchanged band: still ships
         self.assertIn(A, sm[(3, "all")])
 
@@ -275,6 +277,52 @@ class OccurrenceIDDedupe(unittest.TestCase):
         with open(out) as f:
             doc = json.load(f)
         self.assertEqual(doc["slices"], [])                    # 9 after dedupe: no supported cell anywhere
+
+
+class SuppressionThreshold(unittest.TestCase):
+    """TASK-009: month-0 suppression fires on the isolation threshold, not on any
+    omitted month. A cell is withheld from month 0 of its kind only when >= 10 of
+    the 12 single-month slices publish it (<= 2 unknown months against five-wide
+    count bands is boundable); sparser cells ship, uniformly across kinds."""
+
+    def test_ten_of_twelve_withholds_nine_ships(self):
+        P11, P10, P9, SP = "366:1030", "367:1030", "369:1030", "370:1030"
+        tmp = tempfile.mkdtemp()
+        db = os.path.join(tmp, "supp.duckdb")
+        c = duckdb.connect(db)
+        c.execute(f"create table jp({COLS})")
+        rows = []
+        for lat, months in ((30.55, range(1, 12)),    # 11 of 12 published
+                            (30.65, range(1, 11)),    # exactly 10: the threshold itself
+                            (30.75, range(1, 10))):   # 9 of 12
+            rows += [rec(f"P{int(lat * 100)}-{m}-{i}", lat, 128.76, m, f"e{i % 3}")
+                     for m in months for i in range(10)]
+        rows += [rec(f"SP-{i}", 30.85, 128.76, 4, f"e{i % 3}") for i in range(10)]   # one supported month...
+        rows += [rec(f"SX-{i}", 30.85, 128.76, 5, f"e{i % 3}") for i in range(9)]    # ...one below support
+        c.executemany("insert into jp values (" + ",".join(["?"] * 22) + ")", rows)
+        c.close()
+        out = os.path.join(tmp, "research.json")
+        r = run_builder("build_mesh_research.py", "--db", db, "--out", out,
+                        "--islands", os.path.join(FIX, "islands.csv"),
+                        "--taxon-names", os.path.join(tmp, "none.csv"),
+                        "--mask", os.path.join(FIX, "taxon_mask.csv"),
+                        "--coverage", write_coverage(tmp),
+                        "--exceptions", os.path.join(FIX, "match_exceptions.csv"),
+                        "--redlist", os.path.join(FIX, "redlist.json"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("suppression: 4 cell(s) dropped from month 0", r.stdout)
+        with open(out) as f:
+            sm = slice_map(json.load(f))
+        self.assertNotIn(P11, sm[(0, "all")])        # 11 published months: withheld
+        self.assertNotIn(P11, sm[(0, "m")])          # the rule is uniform across kinds
+        self.assertNotIn(P10, sm[(0, "all")])        # exactly 10: the threshold withholds
+        self.assertNotIn(P10, sm[(0, "m")])
+        self.assertIn(P9, sm[(0, "all")])            # 9 published months: three unknown defeat differencing
+        self.assertIn(P9, sm[(0, "m")])
+        self.assertIn(SP, sm[(0, "all")])            # sparse cell ships despite its below-support month
+        self.assertIn(SP, sm[(0, "m")])
+        self.assertEqual(set(sm[(4, "all")]), {P11, P10, P9, SP})   # single months publish untouched
+        self.assertEqual(set(sm[(5, "all")]), {P11, P10, P9})       # SP's month 5 stays below support
 
 
 class ScaledBudget(unittest.TestCase):
@@ -330,6 +378,8 @@ class ScaledBudget(unittest.TestCase):
         entries = sum(len(s[2]) for s in doc["slices"])
         month0 = next(s for s in doc["slices"] if s[0] == 0 and s[1] == "all")
         self.assertEqual(len(month0[2]), 2763)                 # no withheld month anywhere: nothing suppressed
+        biggest = max(len(s[2]) for s in doc["slices"] if s[0] >= 1 and s[1] == "all")
+        self.assertGreaterEqual(len(month0[2]), biggest)       # TASK-009: month 0 never sparser than a month
         self.assertGreater(entries, 9000)                      # the fixture genuinely stresses the budget
         self.assertEqual(len(doc["genera"]), 1)                # the listed genus ships with its names
         genus, areas, namelist = doc["genera"][0]
