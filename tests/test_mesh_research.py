@@ -280,12 +280,15 @@ class OccurrenceIDDedupe(unittest.TestCase):
 
 
 class SuppressionThreshold(unittest.TestCase):
-    """TASK-009: month-0 suppression fires on the isolation threshold, not on any
-    omitted month. A cell is withheld from month 0 of its kind only when >= 10 of
-    the 12 single-month slices publish it (<= 2 unknown months against five-wide
-    count bands is boundable); sparser cells ship, uniformly across kinds."""
+    """Superseded rule (TASK-009 follow-up, PR #56 Codex): no per-cell month-0
+    withholding at all. Bands are >=15 wide over a >=10-record support floor, so
+    even 11 published months leave the unknown remainder bounded within >=180
+    records - differencing cannot isolate a small group, and any withholding
+    only creates the All-vs-month contradiction (cells vanish from All while
+    their monthly slices publish). Cells ship in month 0 whenever they pass
+    month-0 support."""
 
-    def test_ten_of_twelve_withholds_nine_ships(self):
+    def test_published_months_never_affect_month0(self):
         P11, P10, P9, SP = "366:1030", "367:1030", "369:1030", "370:1030"
         tmp = tempfile.mkdtemp()
         db = os.path.join(tmp, "supp.duckdb")
@@ -310,17 +313,12 @@ class SuppressionThreshold(unittest.TestCase):
                         "--exceptions", os.path.join(FIX, "match_exceptions.csv"),
                         "--redlist", os.path.join(FIX, "redlist.json"))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("suppression: 4 cell(s) dropped from month 0", r.stdout)
+        self.assertIn("suppression: 0 cell(s) dropped from month 0", r.stdout)
         with open(out) as f:
             sm = slice_map(json.load(f))
-        self.assertNotIn(P11, sm[(0, "all")])        # 11 published months: withheld
-        self.assertNotIn(P11, sm[(0, "m")])          # the rule is uniform across kinds
-        self.assertNotIn(P10, sm[(0, "all")])        # exactly 10: the threshold withholds
-        self.assertNotIn(P10, sm[(0, "m")])
-        self.assertIn(P9, sm[(0, "all")])            # 9 published months: three unknown defeat differencing
-        self.assertIn(P9, sm[(0, "m")])
-        self.assertIn(SP, sm[(0, "all")])            # sparse cell ships despite its below-support month
-        self.assertIn(SP, sm[(0, "m")])
+        for cell in (P11, P10, P9, SP):              # however many months publish,
+            self.assertIn(cell, sm[(0, "all")])      # month 0 matches its own support
+            self.assertIn(cell, sm[(0, "m")])
         self.assertEqual(set(sm[(4, "all")]), {P11, P10, P9, SP})   # single months publish untouched
         self.assertEqual(set(sm[(5, "all")]), {P11, P10, P9})       # SP's month 5 stays below support
 

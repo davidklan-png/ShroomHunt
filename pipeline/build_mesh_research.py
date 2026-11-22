@@ -176,18 +176,16 @@ if a.previous:
                 del published[sk][key]
                 moved += 1
 
-# ---------- complementary suppression: month 0 (isolation threshold 10 of 12) ------------------
+# ---------- complementary suppression: month 0 ---------------------------------------------
+# No per-cell month-0 withholding is needed, and any rule here only creates the
+# All-vs-month contradiction Codex flagged on #56. Band arithmetic proves it:
+# every published month carries a band >=15 wide (10-24 .. 250+) over a >=10-record
+# support floor, so with n known months the unknown remainder is bounded within
+# (total_band_width + sum of known band widths) >= 15 + 15n records. Even at
+# n=11 that is a >=180-record window - differencing cannot isolate a small group
+# (plan SS7 suppresses only "when a small group can be isolated"). The --previous
+# band-differencing check below still guards against joining older snapshots.
 suppressed = 0
-for k in KIND_ORDER:
-    if (0, k) not in published: continue
-    pub_months = defaultdict(int)          # cell -> single-month slices of kind k that publish it
-    for (m, kk), cells_ in published.items():
-        if kk == k and 1 <= m <= 12:
-            for key in cells_: pub_months[key] += 1
-    for key in [key for key in published[(0, k)] if pub_months[key] >= 10]:
-        del published[(0, k)][key]         # <=2 unknown months against 5-wide bands: boundable, so withhold
-        suppressed += 1
-    if not published[(0, k)]: del published[(0, k)]
 
 # ---------- reviewed genus search list -----------------------------------------------------------
 def read_taxon_names(path):
