@@ -18,8 +18,10 @@ Checks:
   shape       every file parses, carries schema_version 1 (unknown/missing
               rejects, naming the asset) and matches its §6 v1 shape: key
               sets, types, enums (Kind/AreaKind), Bins12 length, Box arity.
-              Area files may carry an optional dominant_source
-              [dataset title, share] pair (share 0.30-1.0, TASK-012);
+              Island/tile area files may carry an optional dominant_source
+              [dataset title, share] pair (share 0.30-1.0, TASK-012); a group
+              file never does (groups merge members, the builder emits it
+              per sampling area only);
   snapshot    a 64-hex lowercase digest, identical in every occurrence file
               and equal to the recomputed bundle digest (pipeline/snapshot.py);
   integrity   dashboard mesh key set == index cells keys; index area ids ==
@@ -142,7 +144,7 @@ def check_dashboard(d, path, reasons):
                 and isinstance(row[4], str)):
             reasons.append(f"{keys}: leads[{i}] is not [species, family|null, neighbour_records, "
                            f"mo_records, triage_hint]")
-    if set(d["lead_totals"]) != {"neighbour_only", "with_mo", "with_unresolved_jp_genus"} \
+    if set(d["lead_totals"]) != {"candidates", "with_mo", "with_unresolved_jp_genus"} \
             or not all(is_uint(v) for v in d["lead_totals"].values()):
         reasons.append(f"{keys}: lead_totals is not the three §6 UInt fields")
     for i, row in enumerate(d["unresolved_genera"]):
@@ -229,6 +231,10 @@ def check_area_file(f, path, reasons, ids):
         return
     if kind != ids.get(f["id"]):
         reasons.append(f"integrity: {path}: kind {kind!r} != index kind {ids.get(f['id'])!r}")
+    if kind == "group" and "dominant_source" in f:
+        reasons.append(f"{keys}: dominant_source is an island/tile sampling note; "
+                       f"a group file never carries one")
+        return
     if not isinstance(f["species"], list) or not isinstance(f["possible"], list) \
             or not isinstance(f["totals"], dict) or (kind == "group" and not isinstance(f["members"], list)):
         reasons.append(f"{keys}: a §6 list/object field has the wrong type")

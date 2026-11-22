@@ -113,7 +113,10 @@ mesh.sort(key=lambda r: (-r[2], r[0], r[1]))       # records desc, then place: d
 
 leads = rows("""select species, family, neighbour_records, mo_records, triage_hint from neighbour_candidates
                 where mo_records > 0 order by neighbour_records desc, mo_records desc, species limit 60""")
-lead_totals = dict(zip(["neighbour_only", "with_mo", "with_unresolved_jp_genus"], one("""
+# lead_totals.candidates counts every neighbour candidate (the "no Japanese record"
+# total the page leads with) — the old key name "neighbour_only" wrongly implied
+# MO-less ones (TASK-017).
+lead_totals = dict(zip(["candidates", "with_mo", "with_unresolved_jp_genus"], one("""
   select count(*), count(*) filter (where mo_records>0),
          count(*) filter (where mo_records>0 and triage_hint like 'Japanese%') from neighbour_candidates""")))
 unresolved = rows("""select genus, family, count(*) n from jp where taxonRank='GENUS' and genus is not null

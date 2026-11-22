@@ -7,7 +7,7 @@ order winning; an empty catalogNumber identifies nothing, so those rows each cou
 The other dashboard suites run fixtures whose jp lacks the two columns, so they keep
 proving the header guard side (every record kept, no SQL error) after this change.
 """
-import json, os, sys, tempfile, unittest
+import json, os, re, sys, tempfile, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -84,8 +84,22 @@ class CrossDatasetDeduplication(unittest.TestCase):
         # leads: the neighbour SQL read the deduped jp — Leadus candidus's only jp record
         # was a dropped duplicate half, so it counts as unrecorded in Japan
         self.assertEqual(d["leads"], [["Leadus candidus", "Fictaceae", 77, 1, "genus unrecorded in Japan"]])
-        self.assertEqual(d["lead_totals"], {"neighbour_only": 1, "with_mo": 1,
+        self.assertEqual(d["lead_totals"], {"candidates": 1, "with_mo": 1,
                                             "with_unresolved_jp_genus": 0})
+
+
+    def test_neighbour_sql_never_schema_qualifies_jp(self):
+        # The dedup temp table shadows jp only for unqualified references (TASK-016):
+        # a qualified main.jp (or any schema.jp) would silently read the raw, un-deduped
+        # table and the leads would drift from the dashboard counts. Comments are
+        # skipped so the header warning itself cannot trip the guard.
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "analysis", "01_neighbour_candidates.sql")) as f:
+            code = "\n".join(ln for ln in f.read().splitlines()
+                             if not ln.lstrip().startswith("--"))
+        qualified = [f"{m}.{n}" for m, n in
+                     re.findall(r"\b([A-Za-z_]\w*)\.([Jj][Pp])\b", code) if m.lower() != "temp"]
+        self.assertEqual(qualified, [])
 
 
 if __name__ == "__main__":

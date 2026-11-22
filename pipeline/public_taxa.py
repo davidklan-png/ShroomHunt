@@ -71,7 +71,6 @@ class Gate:
         self.masked_names = set()      # accepted + aliases + exact Red List names (folded)
         self.ambiguous_names = set()   # fuzzy-matched Red List names (folded)
         self.keys = set()              # masked taxon keys as strings
-        self.masked_genera = set()     # genera of everything above (folded)
         self._binomials = {}           # genus -> {binomial names} for infraspecific prefix match
         self.redlist_names = 0         # aggregate count for dashboard totals
 
@@ -80,10 +79,8 @@ class Gate:
         if not n:
             return
         (self.ambiguous_names if ambiguous else self.masked_names).add(n)
-        genus = n.split()[0]
-        self.masked_genera.add(genus)
         if " " in n:
-            self._binomials.setdefault(genus, set()).add(n)
+            self._binomials.setdefault(n.split()[0], set()).add(n)
 
     def _drop_name(self, name):
         n = _fold(name)
@@ -91,11 +88,10 @@ class Gate:
         self.ambiguous_names.discard(n)
 
     def _rebuild_derived(self):
-        """Recompute genus/prefix sets from the surviving names, so an ignored name
-        no longer quarantines its genus (unless another masked name shares it)."""
-        self.masked_genera, self._binomials = set(), {}
+        """Recompute the prefix sets from the surviving names, so an ignored name
+        no longer masks its infraspecific forms (unless another masked name shares them)."""
+        self._binomials = {}
         for n in self.masked_names | self.ambiguous_names:
-            self.masked_genera.add(n.split()[0])
             if " " in n:
                 self._binomials.setdefault(n.split()[0], set()).add(n)
 

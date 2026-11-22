@@ -136,7 +136,7 @@ Dashboard {
   families: [family: string, species: UInt, records: UInt][],
   mesh: MeshRow[],
   leads: [species: string, family: string|null, neighbour_records: UInt, mo_records: UInt, triage_hint: string][],
-  lead_totals: {neighbour_only: UInt, with_mo: UInt, with_unresolved_jp_genus: UInt},
+  lead_totals: {candidates: UInt, with_mo: UInt, with_unresolved_jp_genus: UInt},
   unresolved_genera: [genus: string, family: string|null, records: UInt][],
   mushroom_observer_japan: UInt,
   sources: {key: string, doi: string, records: UInt|null, created: string|null}[]

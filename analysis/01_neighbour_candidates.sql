@@ -5,6 +5,9 @@
 --   (c) truly absent. Only a voucher specimen (tier A/B) can turn a lead into a record.
 -- TASK-002: the shared protected-taxon gate (pipeline/public_taxa.py) must install its temp
 -- tables (sens, sens_names) before this file runs; without them this fails closed.
+-- jp must stay unqualified — pipeline/build_dashboard_data.py shadows it with a deduped
+-- temp copy (TASK-016); a schema-qualified reference would silently read the raw table.
+-- tests/test_dashboard_dedup.py guards this.
 create or replace table neighbour_candidates as
 with jps as (select distinct speciesKey from jp where speciesKey is not null),
 jpg as (select genus, count(*) jp_genus_records,

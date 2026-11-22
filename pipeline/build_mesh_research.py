@@ -87,7 +87,6 @@ ap.add_argument("--coverage", default="data/reference/redlist_coverage.csv")
 ap.add_argument("--exceptions", default="data/reference/match_exceptions.csv")
 ap.add_argument("--islands", default="data/reference/islands.csv")
 ap.add_argument("--taxon-names", default="data/reference/taxon_names.csv")
-ap.add_argument("--genera-allowlist", help="deprecated no-op: renamed --taxon-names (TASK-008)")
 a = ap.parse_args()
 
 c = duckdb.connect(a.db)
@@ -179,9 +178,6 @@ def read_taxon_names(path):
         rows.append((genus, [n for n in names if n]))
     return rows
 
-if a.genera_allowlist:
-    print("mesh-research: --genera-allowlist is a deprecated no-op; the reviewed name table is "
-          "--taxon-names", file=sys.stderr)
 listed = read_taxon_names(a.taxon_names)
 genera, dropped_genera = [], {"support": 0}
 if not listed:

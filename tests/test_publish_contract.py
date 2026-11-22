@@ -281,6 +281,13 @@ class PublishContract(unittest.TestCase):
             def put(p, bad=bad):
                 self.edit(p, "areas/okisle.json", lambda d: d.update(dominant_source=bad))
             self.reject(put, "dominant_source", restamp=True)
+        # ... and even a well-formed pair rejects on a group file: the builder
+        # emits dominant_source per sampling area (island/tile), never per group.
+        def on_group(p):
+            with open(os.path.join(p, "areas", "index.json")) as f:
+                gid = next(r["id"] for r in json.load(f)["areas"] if r["kind"] == "group")
+            self.edit(p, f"areas/{gid}.json", lambda d: d.update(dominant_source=["Survey", 0.5]))
+        self.reject(on_group, "dominant_source", restamp=True)
 
     def test_over_budget_file_rejects(self):
         def pad(p):
