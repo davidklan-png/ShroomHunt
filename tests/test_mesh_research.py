@@ -217,23 +217,6 @@ class MeshResearch(unittest.TestCase):
         with open(self.build(), "rb") as f:
             self.assertEqual(self.raw, f.read())
 
-    def test_previous_file_suppresses_moved_bands(self):
-        prev = json.loads(self.raw)
-        for s in prev["slices"]:                               # pretend D's (5,'all') band moved; T1's did not
-            if s[0] == 5 and s[1] == "all":
-                s[2] = [[c[0], 1, c[2]] for c in s[2]]
-        ppath = os.path.join(self.tmp, "prev.json")
-        with open(ppath, "w") as f:
-            json.dump(prev, f)
-        with open(self.build("--previous", ppath)) as f:
-            sm = slice_map(json.load(f))
-        self.assertNotIn(D, sm[(5, "all")])                    # band moved vs the previous file: withheld
-        self.assertIn(D, sm[(5, "m")])                         # kind slices keep it
-        self.assertIn(D, sm[(0, "all")])                       # D publishes in a single month only, so even
-                                                              # after the drop the remainder is unboundable
-        self.assertIn(T1, sm[(7, "all")])                      # unchanged band: still ships
-        self.assertIn(A, sm[(3, "all")])
-
     def test_absent_or_unreviewed_name_table_ships_empty_genera_with_warning(self):
         for name, text in (("absent", None), ("seed", "# UNREVIEWED SEED\ngenus,label_en,label_ja,aliases\n")):
             with self.subTest(names=name):
@@ -312,14 +295,13 @@ class OccurrenceIDDedupe(unittest.TestCase):
         self.assertEqual(doc["slices"], [])                    # 9 after dedupe: no supported cell anywhere
 
 
-class SuppressionThreshold(unittest.TestCase):
-    """Superseded rule (TASK-009 follow-up, PR #56 Codex): no per-cell month-0
-    withholding at all. Bands are >=15 wide over a >=10-record support floor, so
-    even 11 published months leave the unknown remainder bounded within >=180
-    records - differencing cannot isolate a small group, and any withholding
-    only creates the All-vs-month contradiction (cells vanish from All while
-    their monthly slices publish). Cells ship in month 0 whenever they pass
-    month-0 support."""
+class Month0Support(unittest.TestCase):
+    """a0c988a: no per-cell month-0 withholding. Bands are >=15 wide over a
+    >=10-record support floor, so even 11 published months leave the unknown
+    remainder bounded within >=180 records - differencing cannot isolate a
+    small group, and any withholding only creates the All-vs-month
+    contradiction (cells vanish from All while their monthly slices publish).
+    Cells ship in month 0 whenever they pass month-0 support."""
 
     def test_published_months_never_affect_month0(self):
         P11, P10, P9, SP = "366:1030", "367:1030", "369:1030", "370:1030"
@@ -346,7 +328,6 @@ class SuppressionThreshold(unittest.TestCase):
                         "--exceptions", os.path.join(FIX, "match_exceptions.csv"),
                         "--redlist", os.path.join(FIX, "redlist.json"))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("suppression: 0 cell(s) dropped from month 0", r.stdout)
         with open(out) as f:
             sm = slice_map(json.load(f))
         for cell in (P11, P10, P9, SP):              # however many months publish,
@@ -381,11 +362,11 @@ class ScaledBudget(unittest.TestCase):
                 row_, col_ = 240 + i % 312, 976 + (i // 312) % 256
                 lat, lon = (row_ + 0.3) / 12, (col_ + 0.4) / 8
                 kinds.append(kinds.pop(0))                     # rotate m -> l -> o per cell
-                mon = i % 12 + 1                               # seasonality-shaped: records in one month,
-                if i % 3 == 0:                                 # else every small month is withheld and the
+                mon = i % 12 + 1                               # seasonality-shaped: each cell's records sit
+                if i % 3 == 0:                                 # in one month; a third of cells add a genus
                     f.writelines(one(lat, lon, mon, f"e{(gid // 4) % 7}") for _ in range(10))
                     f.writelines(one(lat, lon, mon, f"e{(gid // 4) % 7}", rank="GENUS") for _ in range(10))
-                else:                                          # complementary pass drops month 0 entirely
+                else:                                          # side so share bands ride the budget too
                     f.writelines(one(lat, lon, mon, f"e{(gid // 4) % 7}") for _ in range(12 + i % 19))
         c = duckdb.connect(db)
         c.execute(f"create table jp as select * from read_csv('{tsv}', delim='\\t', header=true, "
@@ -408,7 +389,7 @@ class ScaledBudget(unittest.TestCase):
         doc = json.loads(raw)
         entries = sum(len(s[2]) for s in doc["slices"])
         month0 = next(s for s in doc["slices"] if s[0] == 0 and s[1] == "all")
-        self.assertEqual(len(month0[2]), 2763)                 # no withheld month anywhere: nothing suppressed
+        self.assertEqual(len(month0[2]), 2763)                 # every cell passes month-0 support: none withheld
         biggest = max(len(s[2]) for s in doc["slices"] if s[0] >= 1 and s[1] == "all")
         self.assertGreaterEqual(len(month0[2]), biggest)       # TASK-009: month 0 never sparser than a month
         self.assertGreater(entries, 9000)                      # the fixture genuinely stresses the budget

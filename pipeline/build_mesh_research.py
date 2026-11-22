@@ -31,18 +31,14 @@ Definitions this module owns (§7 gates the dashboard UI trusts):
 * Genus share: the two sides are the taxonRank='GENUS' records and the rest.
   Both sides need ≥5 observations, else genus_share_band is null (count band
   may still ship).
-* Complementary suppression: a cell is dropped from month 0 of a kind (the
-  rule is uniform across all/m/l/o) when at least 10 of that kind's 12
-  single-month slices publish it. Ten-plus published months leave at most two
-  unknown months (plus monthless records) in the all-months total, and with
-  count bands five wide, differencing published months against it bounds the
-  remainder tightly enough to isolate a small group. Fewer published months
-  leave the remainder spread too thin to difference, so the cell ships.
-* --previous mesh-research.json: a cell whose count or share band differs
-  from that published file is omitted from that slice entirely (holding both
-  files must not narrow either range). These drops happen before the month-0
-  suppression count, so a previous-dropped month no longer counts as
-  published for the 10-of-12 threshold.
+* No month-0 withholding (a0c988a): every published month carries a count
+  band at least 15 records wide (10–24 … 250+) over a ≥10-record support
+  floor, so differencing the published single months against the all-months
+  total bounds the unknown remainder — at worst one unknown month plus the
+  monthless records — within 15 + 15n records, ≥180 even with 11 of 12
+  months published. No small group can be isolated that way (plan §7
+  withholds only when one can), so month 0 ships exactly the cells that
+  pass month-0 support.
 * Genus search list: only genera on the reviewed name table
   (data/reference/taxon_names.csv, columns genus,label_en,label_ja,aliases —
   David's review maintains it; the rows are the plan §7 genus-search gate).
@@ -57,12 +53,12 @@ Definitions this module owns (§7 gates the dashboard UI trusts):
   still build.
 
 Usage: python3 pipeline/build_mesh_research.py [--db data/shroomhunt.duckdb]
-         [--out data/processed/mesh-research.json] [--previous mesh-research.json]
+         [--out data/processed/mesh-research.json]
          [--taxon-names data/reference/taxon_names.csv] ...
 Output is deterministic bytes (snapshot.write_json); snapshot stays empty
 until pipeline/snapshot.py stamps the bundle. Logs are aggregate counts only.
 """
-import argparse, csv, json, os, sys
+import argparse, csv, os, sys
 from collections import defaultdict
 import duckdb
 
@@ -103,7 +99,6 @@ ap.add_argument("--exceptions", default="data/reference/match_exceptions.csv")
 ap.add_argument("--islands", default="data/reference/islands.csv")
 ap.add_argument("--taxon-names", default="data/reference/taxon_names.csv")
 ap.add_argument("--genera-allowlist", help="deprecated no-op: renamed --taxon-names (TASK-008)")
-ap.add_argument("--previous", help="previously published mesh-research.json (differencing guard)")
 a = ap.parse_args()
 
 c = duckdb.connect(a.db)
@@ -169,31 +164,6 @@ for (m, k), cells_ in slices.items():
                                 min(4, gn * 5 // n) if gn >= MIN_SHARE_SIDE and ng >= MIN_SHARE_SIDE else None]
     if out: published[(m, k)] = out
 
-# ---------- differencing guard against the previous published file -----------------------------
-moved = 0
-if a.previous:
-    with open(a.previous, encoding="utf-8") as f:
-        pm = {(s[0], s[1]): {cl[0]: (cl[1], cl[2]) for cl in s[2]}
-              for s in json.load(f).get("slices", [])}
-    for sk in list(published):
-        if sk not in pm: continue
-        for key in list(published[sk]):
-            was = pm[sk].get(key)
-            if was is not None and tuple(was) != tuple(published[sk][key]):
-                del published[sk][key]
-                moved += 1
-
-# ---------- complementary suppression: month 0 ---------------------------------------------
-# No per-cell month-0 withholding is needed, and any rule here only creates the
-# All-vs-month contradiction Codex flagged on #56. Band arithmetic proves it:
-# every published month carries a band >=15 wide (10-24 .. 250+) over a >=10-record
-# support floor, so with n known months the unknown remainder is bounded within
-# (total_band_width + sum of known band widths) >= 15 + 15n records. Even at
-# n=11 that is a >=180-record window - differencing cannot isolate a small group
-# (plan SS7 suppresses only "when a small group can be isolated"). The --previous
-# band-differencing check below still guards against joining older snapshots.
-suppressed = 0
-
 # ---------- reviewed genus search list -----------------------------------------------------------
 def read_taxon_names(path):
     """(genus, [label_en, label_ja, *aliases]) rows; [] when absent or header-only."""
@@ -252,8 +222,6 @@ slices_out = [[m, k, [[key, *bands] for key, bands in sorted(cells_.items(), key
               for (m, k), cells_ in sorted(published.items(),
                                            key=lambda item: (item[0][0], KIND_ORDER.index(item[0][1])))]
 write_json(a.out, {"schema_version": 1, "snapshot": "", "slices": slices_out, "genera": genera})
-prev_note = f", {moved} cell slice(s) dropped against {os.path.basename(a.previous)}" if a.previous else ""
 print(f"wrote {a.out}: {len(slices_out)} slices, {sum(len(s[2]) for s in slices_out)} cell entries, "
       f"{len(genera)} genera; dedupe key {DEDUP or 'none'} skipped {dupes} duplicate source records")
-print(f"gate audit (aggregate): {audit}; suppression: {suppressed} cell(s) dropped from month 0"
-      f"{prev_note}; genera dropped: {dropped_genera}")
+print(f"gate audit (aggregate): {audit}; genera dropped: {dropped_genera}")

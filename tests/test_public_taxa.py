@@ -142,7 +142,7 @@ class FailClosed(unittest.TestCase):
         row = coverage_row(os.path.join(FIX, "redlist.json"))
         with open(p, "a") as f:
             f.write("sha256,names,matched,ambiguous\n")
-            f.write("0" * 64 + ",1,1,0\n")  # stale row from a previous download
+            f.write("0" * 64 + ",1,1,0\n")  # stale row from an older download
             f.write(",".join(row.values()) + "\n")
         gate_with(self.tmp, coverage=p)  # no PublicTaxaError
 
