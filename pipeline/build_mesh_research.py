@@ -71,30 +71,7 @@ from geo_ja import cell_key, mesh_cell, tile_id  # noqa: E402
 from public_taxa import load_gate  # noqa: E402
 from eligibility import precision_selection, spatially_eligible  # noqa: E402
 from snapshot import write_json  # noqa: E402
-
-# kind() and specimen_key() are copied verbatim from build_areas.py: its top-level
-# CLI makes a clean import impossible. Keep the two copies in sync (§5 row 3A
-# says reuse the classifier, never fork it silently).
-MACRO_CLASSES = {"Agaricomycetes", "Pezizomycetes", "Dacrymycetes"}
-MACRO_GENERA = {"Tremella", "Cordyceps", "Ophiocordyceps", "Tolypocladium", "Polycephalomyces", "Xylaria", "Daldinia",
-                "Hypoxylon", "Annulohypoxylon", "Kretzschmaria", "Hypomyces", "Leotia", "Cudonia", "Bulgaria",
-                "Chlorociboria", "Ascocoryne", "Geoglossum", "Trichoglossum", "Rhytisma"}
-LICHEN_CLASSES = {"Lecanoromycetes", "Arthoniomycetes", "Lichinomycetes", "Coniocybomycetes"}
-LICHEN_FAMILIES = {"Pyrenulaceae", "Trypetheliaceae", "Verrucariaceae", "Strigulaceae", "Monoblastiaceae",
-                   "Arthopyreniaceae", "Collemataceae"}
-
-def kind(cls, fam, genus):
-    if cls in LICHEN_CLASSES or fam in LICHEN_FAMILIES: return "l"
-    if cls in MACRO_CLASSES or genus in MACRO_GENERA: return "m"
-    return "o"
-
-def specimen_key(inst, cat):
-    """Normalised (institutionCode, catalogNumber) — strip, casefold, collapse internal
-    whitespace — or None when either side is empty: one physical specimen published by
-    two datasets counts once (TASK-014); an empty catalogNumber identifies nothing."""
-    def norm(v): return " ".join(str(v).split()).casefold() if v is not None else ""
-    i, c = norm(inst), norm(cat)
-    return (i, c) if i and c else None
+from shared import kind, specimen_key  # noqa: E402
 
 MIN_RECORDS, MIN_EVENTS, MIN_SHARE_SIDE = 10, 3, 5
 GENUS_MIN_RECORDS, GENUS_MIN_CELLS, GENUS_MIN_EVENTS = 10, 3, 3
