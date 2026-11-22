@@ -27,6 +27,7 @@ def canonical(obj):
 
 def write_json(path, obj):
     """Write obj as canonical JSON with an LF terminator."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", newline="\n", encoding="utf-8") as f:
         f.write(canonical(obj) + "\n")
 
