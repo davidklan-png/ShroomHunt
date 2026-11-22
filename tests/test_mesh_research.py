@@ -40,9 +40,9 @@ S_KEYS = ["336:1030", "337:1030", "339:1030", "340:1030", "341:1030"]
 PAUCIUS_CELL = "313:1022"                                          # inside the okisle island box
 
 def rec(gbif, lat, lon, month, ev, rank="SPECIES", species="Prosus lautus", genus="Prosus",
-        cls="Agaricomycetes", unc=None):
+        cls="Agaricomycetes", unc=None, basis="HUMAN_OBSERVATION"):
     return (gbif, None, None if rank != "SPECIES" else gbif.replace("-", ""), species if rank == "SPECIES" else None,
-            genus, "Fictaceae", rank, "HUMAN_OBSERVATION", cls, "Basidiomycota", str(lat), str(lon),
+            genus, "Fictaceae", rank, basis, cls, "Basidiomycota", str(lat), str(lon),
             None if month is None else str(month), "2020", None, "Okinawa", "dx", ev, None, unc, None, None)
 
 def grec(pref, gb, lat, lon, ev, genus):
@@ -249,6 +249,39 @@ class MeshResearch(unittest.TestCase):
                 doc = json.load(open(out))
                 self.assertEqual(doc["genera"], [])
                 self.assertTrue(doc["slices"])                 # slices still build (§6: the file stays legal)
+
+
+class FruitingEvidenceMonths(unittest.TestCase):
+    """TASK-012: month slices count fruiting evidence only — a DNA-sampling record
+    (basisOfRecord MATERIAL_SAMPLE) counts in month 0 like a monthless record, never
+    in its own month. Support gates still count every eligible record."""
+
+    def test_d_records_leave_month_slices_but_stay_in_month0(self):
+        tmp = tempfile.mkdtemp()
+        db = os.path.join(tmp, "dna.duckdb")
+        c = duckdb.connect(db)
+        c.execute(f"create table jp({COLS})")
+        rows = [rec(f"H{i}", 26.1, 127.7, 3, f"e{i % 3}") for i in range(12)]        # fruiting, month 3
+        rows += [rec(f"D{i}", 26.1, 127.7, 4, f"d{i % 3}", basis="MATERIAL_SAMPLE")
+                 for i in range(13)]                                                 # DNA, month 4
+        c.executemany("insert into jp values (" + ",".join(["?"] * 22) + ")", rows)
+        c.close()
+        out = os.path.join(tmp, "research.json")
+        r = run_builder("build_mesh_research.py", "--db", db, "--out", out,
+                        "--islands", os.path.join(FIX, "islands.csv"),
+                        "--taxon-names", os.path.join(tmp, "none.csv"),
+                        "--mask", os.path.join(FIX, "taxon_mask.csv"),
+                        "--coverage", write_coverage(tmp),
+                        "--exceptions", os.path.join(FIX, "match_exceptions.csv"),
+                        "--redlist", os.path.join(FIX, "redlist.json"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        with open(out) as f:
+            sm = slice_map(json.load(f))
+        self.assertEqual(sm[(3, "all")], {A: (0, None)})      # 12 fruiting records ship month 3
+        self.assertEqual(sm[(3, "m")], {A: (0, None)})
+        self.assertNotIn((4, "all"), sm)                      # 13 DNA samples pass support alone...
+        self.assertNotIn((4, "m"), sm)                        # ...yet no month slice counts them
+        self.assertEqual(sm[(0, "all")][A], (1, None))        # month 0 keeps all 25: band 1, not 0
 
 
 class OccurrenceIDDedupe(unittest.TestCase):

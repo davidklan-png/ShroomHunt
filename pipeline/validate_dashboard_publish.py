@@ -17,7 +17,9 @@ Checks:
   allowlist   exactly the files the builders own (above);
   shape       every file parses, carries schema_version 1 (unknown/missing
               rejects, naming the asset) and matches its §6 v1 shape: key
-              sets, types, enums (Kind/AreaKind), Bins12 length, Box arity;
+              sets, types, enums (Kind/AreaKind), Bins12 length, Box arity.
+              Area files may carry an optional dominant_source
+              [dataset title, share] pair (share 0.30-1.0, TASK-012);
   snapshot    a 64-hex lowercase digest, identical in every occurrence file
               and equal to the recomputed bundle digest (pipeline/snapshot.py);
   integrity   dashboard mesh key set == index cells keys; index area ids ==
@@ -217,7 +219,7 @@ def check_area_file(f, path, reasons, ids):
     keys = f"shape: {path}"
     kind = f.get("kind") if isinstance(f, dict) else None
     want = GROUP_FILE if kind == "group" else (AREA_FILE if kind in AREA_KINDS else None)
-    if want is None or set(f) != want:
+    if want is None or not (set(f) == want or set(f) == want | {"dominant_source"}):
         reasons.append(f"{keys}: key set != §6 AreaFile for kind {kind!r}")
         return
     if not all(isinstance(f[k], str) and f[k] for k in ("id", "name_en", "name_ja")) \
@@ -246,6 +248,12 @@ def check_area_file(f, path, reasons, ids):
         reasons.append(f"unsafe field: {path}: totals.by_name must be 0 (name-only counts are withdrawn)")
     if not is_bins12(f["months"]):
         reasons.append(f"{keys}: months is not a Bins12")
+    if "dominant_source" in f:                              # TASK-012: optional sampling-bias note
+        ds = f["dominant_source"]
+        if not (isinstance(ds, list) and len(ds) == 2 and isinstance(ds[0], str) and ds[0]
+                and is_num(ds[1]) and 0.30 <= ds[1] <= 1.0):
+            reasons.append(f"{keys}: dominant_source is not a [dataset title, share] pair "
+                           f"with 0.30 <= share <= 1.0")
     if f["top_localities"] != []:
         reasons.append(f"unsafe field: {path}: top_localities must be [] (occurrence-derived "
                        f"localities are withdrawn)")

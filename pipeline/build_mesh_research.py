@@ -18,6 +18,10 @@ Definitions this module owns (§7 gates the dashboard UI trusts):
 * A sampling event is a distinct non-null (datasetKey, eventID) pair; when a
   record's eventID is missing, (datasetKey, recordedBy) stands in for that
   record. Records with neither contribute no event.
+* Month slices count fruiting evidence only (TASK-012): a DNA-sampling record
+  (basisOfRecord MATERIAL_SAMPLE) counts in month 0 like a monthless record
+  and never in its own month. Support gates still count every eligible
+  record, so month 0 and the month slices diverge by design.
 * Eligible = gate-public (pipeline/public_taxa.py) AND spatially eligible
   (pipeline/eligibility.py) — the same two gates every spatial output uses.
 * Support gate, per cell and slice: ≥10 eligible records AND ≥3 independent
@@ -112,8 +116,9 @@ DEDUP = next((k for k in ("gbifID", "occurrenceID") if k in jp_cols), None)
 def col(n): return f"jp.{n}" if n in jp_cols else "null"
 rows = c.execute(f"""
   select {col('speciesKey')}, {col('species')}, {col('genus')}, {col('family')}, {col('taxonRank')},
-         {col('class')}, try_cast({col('month')} as int), try_cast({col('decimalLatitude')} as double),
-         try_cast({col('decimalLongitude')} as double), {col('datasetKey')}, {col('eventID')},
+         {col('class')}, {col('basisOfRecord')}, try_cast({col('month')} as int),
+         try_cast({col('decimalLatitude')} as double), try_cast({col('decimalLongitude')} as double),
+         {col('datasetKey')}, {col('eventID')},
          {col('recordedBy')}, {col(DEDUP) if DEDUP else 'null'}, {", ".join(sel)}
   from jp {elig_join}""" + (f" order by jp.{DEDUP} nulls last" if DEDUP else "")).fetchall()
 audit = gate.audit((r[1], r[0], r[2], r[4]) for r in rows)
@@ -123,7 +128,7 @@ slices = defaultdict(lambda: defaultdict(lambda: [0, set(), 0]))   # (month, kin
 genus_hits = defaultdict(list)                                     # folded genus -> [(cellkey, event)]
 seen, dupes = set(), 0
 for r in rows:
-    sk, sp, gen, fam, rank, cls, mon, lat, lon, dsk, eid, rby, sid, unc, prec, iss, genz, held = r
+    sk, sp, gen, fam, rank, cls, bor, mon, lat, lon, dsk, eid, rby, sid, unc, prec, iss, genz, held = r
     if sid is not None and str(sid).strip():
         s = str(sid).strip()
         if s in seen:
@@ -136,7 +141,9 @@ for r in rows:
     ev = None
     if eid is not None and str(eid).strip(): ev = (str(dsk) if dsk is not None else None, str(eid).strip())
     elif rby is not None and str(rby).strip(): ev = (str(dsk) if dsk is not None else None, str(rby).strip())
-    months = (0, mon) if mon is not None and 1 <= mon <= 12 else (0,)
+    # TASK-012: month slices are fruiting evidence; a DNA sample counts only in month 0,
+    # exactly like a record with no month.
+    months = (0, mon) if bor != "MATERIAL_SAMPLE" and mon is not None and 1 <= mon <= 12 else (0,)
     kd = kind(cls, fam, gen or (sp or "").split(" ")[0])
     for m in months:                       # one record counts in its month slice and month 0
         for k in ("all", kd):              # ... and in its kind and in 'all'

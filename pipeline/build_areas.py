@@ -20,12 +20,17 @@ cell centroids (East Asia keeps its native 1° cells). The source-precision elig
 shared with build_dashboard_data.py via pipeline/eligibility.py (TASK-006), and §6 v1 files carry
 schema_version 1 plus a bundle snapshot stamped by pipeline/snapshot.py.
 
+Fruiting-evidence rule (TASK-012): every month histogram (area months, per-species m, candidate m)
+counts non-'d' evidence only (basisOfRecord MATERIAL_SAMPLE excluded); record totals, squares,
+years and evidence breakdowns keep every record. Each area may also carry a non-locational
+dominant_source [dataset title, share] when one datasetKey holds >= 30% of its records.
+
 Usage: python3 pipeline/build_areas.py --out data/processed/areas  [--db data/shroomhunt.duckdb]
        [--redlist data/raw/redlist/redlist_fungi_jp.json]
 Tables used: jp (GBIF SIMPLE_CSV), optional jp_extra (gbifID, habitat and the DwC-A precision notes),
 optional ea (East Asia cells).
 """
-import argparse, csv, json, math, os, re, sys
+import argparse, csv, json, math, os, re, sys, urllib.request
 from collections import Counter, defaultdict
 import duckdb
 
@@ -63,7 +68,27 @@ ap.add_argument("--mask", default="data/reference/taxon_mask.csv")
 ap.add_argument("--coverage", default="data/reference/redlist_coverage.csv")
 ap.add_argument("--exceptions", default="data/reference/match_exceptions.csv")
 ap.add_argument("--islands", default="data/reference/islands.csv")
+ap.add_argument("--titles", help="optional JSON {datasetKey: title} resolving dominant_source "
+                                 "titles offline (tests); misses still go to the GBIF API")
 a = ap.parse_args()
+offline_titles = json.load(open(a.titles)) if a.titles else {}
+_titles = {}   # per-run cache: datasetKey -> resolved title
+
+def dataset_title(key):
+    """datasetKey -> public title: the offline --titles map first, then the GBIF dataset
+    API (api.gbif.org/v1/dataset/{key}); the bare datasetKey on any failure."""
+    if key in _titles: return _titles[key]
+    title = offline_titles.get(key)
+    if title is None:
+        try:
+            with urllib.request.urlopen(f"https://api.gbif.org/v1/dataset/{key}", timeout=10) as r:
+                title = json.load(r).get("title")
+        except Exception as e:
+            print(f"areas: dataset {key}: title fetch failed ({e}); shipping the bare datasetKey",
+                  file=sys.stderr)
+    _titles[key] = title or key
+    return _titles[key]
+
 c = duckdb.connect(a.db)
 tables = {r[0] for r in c.execute("select table_name from information_schema.tables").fetchall()}
 
@@ -80,7 +105,7 @@ rows = c.execute(f"""
   select jp.speciesKey, jp.species, jp.family, jp.taxonRank, jp.basisOfRecord, jp.class, jp.genus,
          try_cast(jp.decimalLatitude as double), try_cast(jp.decimalLongitude as double),
          try_cast(jp.month as int), try_cast(jp.year as int), jp.locality, jp.stateProvince,
-         {", ".join(sel)}
+         jp.datasetKey, {", ".join(sel)}
   from jp {elig_join}""").fetchall()
 audit = gate.audit((r[1], r[0], r[6], r[3]) for r in rows)
 recs = [r for r in rows if gate.is_public(species=r[1], species_key=r[0], genus=r[6], taxon_rank=r[3])]
@@ -121,7 +146,7 @@ area_recs = defaultdict(list)       # area -> records
 fam_class = defaultdict(Counter)
 cell_area, tile_prefs = {}, defaultdict(Counter)
 for r in recs:
-    key, sp, fam, rank, bor, cls, gen, lat, lon, mon, yr, loc, prov, unc, prec, iss, genz, held = r
+    key, sp, fam, rank, bor, cls, gen, lat, lon, mon, yr, loc, prov, dsk, unc, prec, iss, genz, held = r
     fam_class[fam or ""][cls] += 1
     kd = kind(cls, fam, gen or (sp or "").split(" ")[0])
     cell = mesh_cell(lat, lon)
@@ -137,7 +162,7 @@ for r in recs:
         # island's record totals by name — by_name reports that as 0 (§1C keeps the column).
         cell, aid = None, island_by_name(loc, prov)
         if not aid: continue
-    area_recs[aid].append((key, sp, fam, rank, EVID.get(bor, "o"), cell, mon, yr, kd))
+    area_recs[aid].append((key, sp, fam, rank, EVID.get(bor, "o"), cell, mon, yr, kd, dsk))
 for i in islands:   # every known island keeps its route even when its eligible records drop to zero
     area_recs.setdefault(i["id"], [])
 
@@ -169,11 +194,12 @@ def public_center(bbox):
 
 jp_points = defaultdict(lambda: defaultdict(lambda: [0] * 13))   # sp -> (cell centre, label) -> [12 months + total]
 for aid, lst in area_recs.items():
-    for (key, sp, fam, rank, ev, cell, mon, yr, kd) in lst:
+    for (key, sp, fam, rank, ev, cell, mon, yr, kd, dsk) in lst:
         if rank in SPECIES_RANKS and sp and cell is not None:   # eligible records only (TASK-005)
             v = jp_points[(sp, fam or "", kd)][(*cell_center(*cell), aid)]   # one public centroid per mesh
             v[12] += 1
-            if mon and 1 <= mon <= 12: v[mon - 1] += 1
+            # TASK-012: candidate months are fruiting evidence; the v[12] record total keeps all
+            if ev != "d" and mon and 1 <= mon <= 12: v[mon - 1] += 1
 if "nb" in tables:
     for fam, cls, n in c.execute("select family, class, count(*) from nb where family is not null group by 1,2").fetchall():
         fam_class[fam][cls] += n
@@ -245,8 +271,9 @@ for aid, lst in sorted(area_recs.items()):
     by_sp = {}
     unresolved = 0
     months_all = [0] * 12
-    for (key, sp, fam, rank, ev, cell, mon, yr, kd) in lst:
-        if cell is not None and mon and 1 <= mon <= 12: months_all[mon - 1] += 1
+    for (key, sp, fam, rank, ev, cell, mon, yr, kd, dsk) in lst:
+        # TASK-012: months are fruiting evidence (non-'d'); totals/sq/y/e keep every record
+        if ev != "d" and cell is not None and mon and 1 <= mon <= 12: months_all[mon - 1] += 1
         if rank not in SPECIES_RANKS or not sp:
             unresolved += 1
             continue
@@ -254,7 +281,7 @@ for aid, lst in sorted(area_recs.items()):
                                   "y": [9999, 0], "e": Counter()})
         s["r"] += 1
         if cell is not None:
-            if mon and 1 <= mon <= 12: s["m"][mon - 1] += 1
+            if ev != "d" and mon and 1 <= mon <= 12: s["m"][mon - 1] += 1
             s["sq"].add(cell_key(*cell))
         if yr: s["y"] = [min(s["y"][0], yr), max(s["y"][1], yr)]
         s["e"][ev] += 1
@@ -275,6 +302,12 @@ for aid, lst in sorted(area_recs.items()):
            "months": months_all, "top_localities": [],
            # §6: a zero-record entry keeps its route and public reference bbox with empty data
            "species": species, "possible": possible_for(aid, center, set(by_sp)) if lst else []}
+    # TASK-012: non-locational sampling bias note — the top datasetKey's share of area records
+    dk = Counter(r[9] for r in lst if r[9])
+    if dk:
+        top_key, top_n = sorted(dk.items(), key=lambda kv: (-kv[1], kv[0]))[0]   # deterministic under shuffles
+        if top_n / len(lst) >= 0.30:
+            out["dominant_source"] = [dataset_title(top_key), round(top_n / len(lst), 2)]
     write_json(os.path.join(a.out, f"{aid}.json"), out)
     built[aid] = out
     index.append({"id": aid, "kind": out["kind"], "name_en": name_en, "name_ja": name_ja, "group_en": group_en,
@@ -325,5 +358,5 @@ write_json(os.path.join(a.out, "index.json"),
             "masked_records": masked, "has_habitat": False, "has_neighbours": "ea" in tables})
 print(f"{len(index)} areas ({sum(1 for x in index if x['kind']=='island')} islands), {len(cell_area)} squares mapped, "
       f"{masked} sensitive records excluded, precision flags applied={sum(x != 'null' for x in sel)}/5, "
-      f"neighbours={'ea' in tables}")
+      f"neighbours={'ea' in tables}, dominant_source on {sum(1 for x in built.values() if 'dominant_source' in x)} area(s)")
 print(f"gate audit (aggregate): {audit}")

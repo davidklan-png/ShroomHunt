@@ -274,6 +274,14 @@ class PublishContract(unittest.TestCase):
             self.edit(p, "areas/okisle.json", lambda d: d.update(name_en="Hidden Corner Meadow"))
         self.reject(prose, "unsafe field", "known prose pattern", restamp=True)
 
+    def test_dominant_source_shape_rejects(self):
+        # TASK-012: the optional field is [title, share] with share >= 0.30; anything
+        # else — a share below the threshold, a non-string title, a wrong arity — rejects.
+        for bad in (["Survey", 0.1], ["Survey", True], [7, 0.5], ["Survey"], ["Survey", 0.5, "x"]):
+            def put(p, bad=bad):
+                self.edit(p, "areas/okisle.json", lambda d: d.update(dominant_source=bad))
+            self.reject(put, "dominant_source", restamp=True)
+
     def test_over_budget_file_rejects(self):
         def pad(p):
             def fn(d):

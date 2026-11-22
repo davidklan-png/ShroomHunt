@@ -85,9 +85,9 @@ EXPECTED_CELLS = {"313:1021": "okisle",   # Prosus x2 + the genus row (corner + 
                   "322:1025": "t4028"}    # Neighborus proximus: no island claims the centre
 
 
-def build(db, islands, refs):
+def build(db, islands, refs, *extra):
     out = tempfile.mkdtemp(prefix="areas-")
-    r = run_builder("build_areas.py", "--db", db, "--out", out, "--islands", islands, *refs)
+    r = run_builder("build_areas.py", "--db", db, "--out", out, "--islands", islands, *refs, *extra)
     assert r.returncode == 0, r.stdout + r.stderr
     return out
 
@@ -303,6 +303,136 @@ class BuildDbEligibilityFields(unittest.TestCase):
                          "from jp_extra").fetchall()
         c.close()
         self.assertEqual(rows, [(None, None, None, None, None)])
+
+
+class FruitingEvidenceMonths(unittest.TestCase):
+    """TASK-012: area month histograms count fruiting evidence only (basisOfRecord
+    MATERIAL_SAMPLE excluded) — months_all, per-species m, the candidate m and the
+    group month sums — while record totals, squares, years and evidence breakdowns
+    keep every record."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        cls.islands = os.path.join(cls.tmp, "islands.csv")
+        with open(cls.islands, "w") as f:
+            f.write(ISLANDS_CSV)
+        cls.refs = ["--mask", os.path.join(FIX, "taxon_mask.csv"),
+                    "--coverage", write_coverage(cls.tmp),
+                    "--exceptions", os.path.join(FIX, "match_exceptions.csv"),
+                    "--redlist", os.path.join(FIX, "redlist.json")]
+        cls.db = os.path.join(cls.tmp, "evid.duckdb")
+        c = duckdb.connect(cls.db)
+        c.execute("create table jp(gbifID varchar, " + JP_COLUMNS + FLAG_COLUMNS + ")")
+        marks = ",".join(["?"] * 19)
+        c.executemany(f"insert into jp values ({marks})", [
+            # okisle cell 313:1021: Prosus with observation (m3), observation (m3),
+            # DNA sample (m2, excluded) and specimen (m2, counted — fruiting evidence)
+            ("e1", "5101", "Prosus lautus", "Prosus", "Fictaceae", "SPECIES", "HUMAN_OBSERVATION",
+             "Agaricomycetes", "Basidiomycota", "26.1", "127.7", "3", "2020", None, "Okinawa",
+             "dx", None, None, None),
+            ("e2", "5101", "Prosus lautus", "Prosus", "Fictaceae", "SPECIES", "HUMAN_OBSERVATION",
+             "Agaricomycetes", "Basidiomycota", "26.1", "127.7", "3", "2020", None, "Okinawa",
+             "dx", None, None, None),
+            ("e3", "5101", "Prosus lautus", "Prosus", "Fictaceae", "SPECIES", "MATERIAL_SAMPLE",
+             "Agaricomycetes", "Basidiomycota", "26.1", "127.7", "2", "2020", None, "Okinawa",
+             "dx", None, None, None),
+            ("e4", "5101", "Prosus lautus", "Prosus", "Fictaceae", "SPECIES", "PRESERVED_SPECIMEN",
+             "Agaricomycetes", "Basidiomycota", "26.1", "127.7", "2", "2020", None, "Okinawa",
+             "dx", None, None, None),
+            # tile t4028 cell 322:1025: Candidus with one observation (m5) and two DNA
+            # samples (m9) — the candidate histogram for okisle must keep m5 only
+            ("e5", "5102", "Candidus alter", "Candidus", "Fictaceae", "SPECIES", "HUMAN_OBSERVATION",
+             "Agaricomycetes", "Basidiomycota", "26.9", "128.15", "5", "2020", None, "Okinawa",
+             "dx", None, None, None),
+            ("e6", "5102", "Candidus alter", "Candidus", "Fictaceae", "SPECIES", "MATERIAL_SAMPLE",
+             "Agaricomycetes", "Basidiomycota", "26.9", "128.15", "9", "2020", None, "Okinawa",
+             "dx", None, None, None),
+            ("e7", "5102", "Candidus alter", "Candidus", "Fictaceae", "SPECIES", "MATERIAL_SAMPLE",
+             "Agaricomycetes", "Basidiomycota", "26.9", "128.15", "9", "2020", None, "Okinawa",
+             "dx", None, None, None),
+        ])
+        c.close()
+        cls.areas = build(cls.db, cls.islands, cls.refs)
+        with open(os.path.join(cls.areas, "okisle.json")) as f:
+            cls.ok = json.load(f)
+        with open(os.path.join(cls.areas, "t4028.json")) as f:
+            cls.tile = json.load(f)
+        with open(os.path.join(cls.areas, "g-okinawa-prefecture.json")) as f:
+            cls.group = json.load(f)
+
+    def test_area_months_and_species_m_exclude_dna_months(self):
+        # months 2 (specimen) and 3 (observations) count; the month-2 DNA sample does not
+        self.assertEqual(self.ok["months"], [0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        row = next(s for s in self.ok["species"] if s["n"] == "Prosus lautus")
+        self.assertEqual(row["m"], [0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        # totals keep every record: 4 incl. the DNA sample, square kept, evidence kept
+        self.assertEqual((row["r"], row["sq"], row["e"]), (4, 1, {"o": 2, "d": 1, "s": 1}))
+        self.assertEqual(self.ok["totals"]["records"], 4)
+
+    def test_candidate_months_exclude_dna_months(self):
+        cand = next(p for p in self.ok["possible"] if p["n"] == "Candidus alter")
+        self.assertEqual(cand["m"], [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0])   # m5 only, m9 excluded
+        tile_row = next(s for s in self.tile["species"] if s["n"] == "Candidus alter")
+        self.assertEqual((tile_row["r"], tile_row["m"][4], tile_row["m"][8]), (3, 1, 0))
+        self.assertEqual(self.tile["months"], [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0])
+        self.assertEqual(self.tile["totals"]["records"], 3)                  # DNA still counted here
+
+    def test_group_months_sum_the_excluded_member_months(self):
+        self.assertEqual(self.group["months"], self.ok["months"])           # transitively 'd'-free
+        row = next(s for s in self.group["species"] if s["n"] == "Prosus lautus")
+        self.assertEqual(row["m"], [0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+
+
+class DominantSource(unittest.TestCase):
+    """TASK-012: per area, dominant_source [title, share] for the top datasetKey
+    when it holds >= 30% of the area's records — titles resolved offline via
+    --titles, the bare datasetKey when resolution fails."""
+
+    def area_with(self, datasets, titles=None):
+        tmp = tempfile.mkdtemp()
+        db = os.path.join(tmp, "dom.duckdb")
+        c = duckdb.connect(db)
+        c.execute("create table jp(gbifID varchar, " + JP_COLUMNS + FLAG_COLUMNS + ")")
+        c.executemany("insert into jp values (" + ",".join(["?"] * 19) + ")",
+                      [(f"g{i}", "5101", "Prosus lautus", "Prosus", "Fictaceae", "SPECIES",
+                        "HUMAN_OBSERVATION", "Agaricomycetes", "Basidiomycota", "26.1", "127.7",
+                        "3", "2020", None, "Okinawa", d, None, None, None)
+                       for i, d in enumerate(datasets)])
+        c.close()
+        islands = os.path.join(tmp, "islands.csv")
+        with open(islands, "w") as f:
+            f.write(ISLANDS_CSV)
+        extra = ()
+        if titles is not None:
+            tp = os.path.join(tmp, "titles.json")
+            with open(tp, "w") as f:
+                json.dump(titles, f)
+            extra = ("--titles", tp)
+        out = build(db, islands, ["--mask", os.path.join(FIX, "taxon_mask.csv"),
+                                  "--coverage", write_coverage(tmp),
+                                  "--exceptions", os.path.join(FIX, "match_exceptions.csv"),
+                                  "--redlist", os.path.join(FIX, "redlist.json")], *extra)
+        with open(os.path.join(out, "okisle.json")) as f:
+            return json.load(f)
+
+    def test_two_thirds_ships_title_and_share(self):
+        area = self.area_with(["a", "a", "a", "a", "b", "b"],
+                              {"a": "Survey A", "b": "Survey B"})
+        self.assertEqual(area["dominant_source"], ["Survey A", 0.67])
+
+    def test_exactly_thirty_percent_ships(self):
+        area = self.area_with(["c"] * 3 + ["d"] * 3 + ["e"] * 2 + ["f"] * 2,
+                              {"c": "Survey C", "d": "D", "e": "E", "f": "F"})
+        self.assertEqual(area["dominant_source"], ["Survey C", 0.3])
+
+    def test_below_thirty_percent_omits_the_key(self):
+        area = self.area_with(["a", "b", "c", "d"], {"a": "A", "b": "B", "c": "C", "d": "D"})
+        self.assertNotIn("dominant_source", area)
+
+    def test_title_fetch_failure_falls_back_to_the_bare_key(self):
+        area = self.area_with(["not-a-real-key"] * 4)      # absent from any map: fetch fails
+        self.assertEqual(area["dominant_source"], ["not-a-real-key", 1.0])
 
 
 if __name__ == "__main__":
