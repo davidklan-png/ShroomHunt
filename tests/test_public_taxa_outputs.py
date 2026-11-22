@@ -166,15 +166,20 @@ class BuildersFailClosed(unittest.TestCase):
         return r.stderr
 
     def test_missing_redlist_blocks_dashboard(self):
-        err = self.check("build_dashboard_data.py", "d1.json")
+        # explicit nonexistent redlist: a real download may sit at the default path
+        err = self.check("build_dashboard_data.py", "d1.json",
+                         "--redlist", os.path.join(self.tmp, "nope.json"))
         self.assertIn("Red List download missing", err)
 
-    def test_unreviewed_repo_seed_coverage_blocks_dashboard(self):
-        # fixture inputs but the repo's empty coverage seed: no publish until reviewed
+    def test_empty_coverage_seed_blocks_dashboard(self):
+        # fixture inputs but an empty (unreviewed) coverage manifest: no publish
+        seed = os.path.join(self.tmp, "coverage.csv")
+        open(seed, "w").write("# seed\nsha256,names,matched,ambiguous\n")
         err = self.check("build_dashboard_data.py", "d2.json",
                          "--mask", os.path.join(FIX, "taxon_mask.csv"),
                          "--exceptions", os.path.join(FIX, "match_exceptions.csv"),
-                         "--redlist", os.path.join(FIX, "redlist.json"))
+                         "--redlist", os.path.join(FIX, "redlist.json"),
+                         "--coverage", seed)
         self.assertIn("coverage manifest is empty", err)
 
     def test_missing_mask_blocks_areas(self):
