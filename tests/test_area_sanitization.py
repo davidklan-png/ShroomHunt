@@ -435,5 +435,56 @@ class DominantSource(unittest.TestCase):
         self.assertEqual(area["dominant_source"], ["not-a-real-key", 1.0])
 
 
+class CrossDatasetDeduplication(unittest.TestCase):
+    """TASK-014: area counts apply the same normalised (institutionCode, catalogNumber)
+    key as the research builder — one specimen twice-published under different
+    gbifIDs/datasetKeys counts once (first in gbifID order wins); an empty
+    catalogNumber identifies nothing, so those rows each count."""
+
+    def test_pair_counts_once_in_area_totals(self):
+        tmp = tempfile.mkdtemp()
+        db = os.path.join(tmp, "xdup.duckdb")
+        c = duckdb.connect(db)
+        c.execute("create table jp(gbifID varchar, " + JP_COLUMNS + FLAG_COLUMNS
+                  + ", institutionCode varchar, catalogNumber varchar)")
+        # cell 313:1021 -> okisle. Four Prosus rows: "1"/"2" are one S-NET specimen
+        # twice-published (different case/spacing, different datasetKey) — "1", first in
+        # gbifID order, wins, so its month 3 survives and "2"'s month 5 never lands;
+        # "3"/"4" carry no catalogNumber, so both count.
+        rows = [("1", "5001", "Prosus lautus", "Prosus", "Fictaceae", "SPECIES", "HUMAN_OBSERVATION",
+                 "Agaricomycetes", "Basidiomycota", "26.1", "127.7", "3", "2019", None, "Okinawa",
+                 "dx", None, None, None, "S-NET", "AB 7"),
+                ("2", "5001", "Prosus lautus", "Prosus", "Fictaceae", "SPECIES", "HUMAN_OBSERVATION",
+                 "Agaricomycetes", "Basidiomycota", "26.1", "127.7", "5", "2021", None, "Okinawa",
+                 "dy", None, None, None, " s-net ", "ab  7"),
+                ("3", "5001", "Prosus lautus", "Prosus", "Fictaceae", "SPECIES", "HUMAN_OBSERVATION",
+                 "Agaricomycetes", "Basidiomycota", "26.1", "127.7", "7", "2020", None, "Okinawa",
+                 "dx", None, None, None, "S-NET", ""),
+                ("4", "5001", "Prosus lautus", "Prosus", "Fictaceae", "SPECIES", "HUMAN_OBSERVATION",
+                 "Agaricomycetes", "Basidiomycota", "26.1", "127.7", "8", "2020", None, "Okinawa",
+                 "dx", None, None, None, "S-NET", None)]
+        c.executemany("insert into jp values (" + ",".join(["?"] * 21) + ")", rows)
+        c.close()
+        islands = os.path.join(tmp, "islands.csv")
+        with open(islands, "w") as f:
+            f.write(ISLANDS_CSV)
+        out = tempfile.mkdtemp(prefix="areas-")
+        r = run_builder("build_areas.py", "--db", db, "--out", out, "--islands", islands,
+                        "--mask", os.path.join(FIX, "taxon_mask.csv"),
+                        "--coverage", write_coverage(tmp),
+                        "--exceptions", os.path.join(FIX, "match_exceptions.csv"),
+                        "--redlist", os.path.join(FIX, "redlist.json"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("cross-dataset duplicates removed: 1", r.stdout)
+        with open(os.path.join(out, "okisle.json")) as f:
+            ok = json.load(f)
+        self.assertEqual(ok["totals"], {"records": 3, "by_name": 0, "species": 1,
+                                        "unresolved": 0, "squares": 1})
+        self.assertEqual(ok["months"], [0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0])   # months 3, 7, 8 — never 5
+        row = next(s for s in ok["species"] if s["n"] == "Prosus lautus")
+        self.assertEqual((row["r"], row["sq"], row["y"]), (3, 1, [2019, 2020]))
+        self.assertEqual(row["m"], ok["months"])
+
+
 if __name__ == "__main__":
     unittest.main()

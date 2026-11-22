@@ -25,6 +25,10 @@ counts non-'d' evidence only (basisOfRecord MATERIAL_SAMPLE excluded); record to
 years and evidence breakdowns keep every record. Each area may also carry a non-locational
 dominant_source [dataset title, share] when one datasetKey holds >= 30% of its records.
 
+Cross-dataset dedup (TASK-014): records sharing a normalised (institutionCode, catalogNumber) —
+one physical specimen published by two datasets under different gbifIDs — count once, the first
+in gbifID order winning; an empty catalogNumber identifies nothing, so those rows each count.
+
 Usage: python3 pipeline/build_areas.py --out data/processed/areas  [--db data/shroomhunt.duckdb]
        [--redlist data/raw/redlist/redlist_fungi_jp.json]
 Tables used: jp (GBIF SIMPLE_CSV), optional jp_extra (gbifID, habitat and the DwC-A precision notes),
@@ -59,6 +63,15 @@ def kind(cls, fam, genus):
     if cls in LICHEN_CLASSES or fam in LICHEN_FAMILIES: return "l"
     if cls in MACRO_CLASSES or genus in MACRO_GENERA: return "m"
     return "o"
+
+def specimen_key(inst, cat):
+    """Normalised (institutionCode, catalogNumber) — strip, casefold, collapse internal
+    whitespace — or None when either side is empty: one physical specimen published by
+    two datasets counts once (TASK-014); an empty catalogNumber identifies nothing.
+    Copied verbatim into build_mesh_research.py (its top-level CLI blocks the import)."""
+    def norm(v): return " ".join(str(v).split()).casefold() if v is not None else ""
+    i, c = norm(inst), norm(cat)
+    return (i, c) if i and c else None
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--db", default="data/shroomhunt.duckdb")
@@ -101,14 +114,31 @@ gate = load_gate(mask=a.mask, coverage=a.coverage, exceptions=a.exceptions, redl
 elig_join, sel = precision_selection(c)
 
 # ---------- base records -------------------------------------------------------------------
+# institutionCode/catalogNumber are header-guarded like the research builder's columns: a jp
+# table without them (test fixtures) skips cross-dataset dedup instead of erroring. The
+# gbifID order pins which duplicate survives (the first), keeping output deterministic.
+jp_cols = {r[0] for r in c.execute(
+    "select column_name from information_schema.columns where table_name='jp'").fetchall()}
+specimen_cols = ", ".join(f"jp.{n}" if n in jp_cols else "null" for n in ("institutionCode", "catalogNumber"))
 rows = c.execute(f"""
   select jp.speciesKey, jp.species, jp.family, jp.taxonRank, jp.basisOfRecord, jp.class, jp.genus,
          try_cast(jp.decimalLatitude as double), try_cast(jp.decimalLongitude as double),
          try_cast(jp.month as int), try_cast(jp.year as int), jp.locality, jp.stateProvince,
-         jp.datasetKey, {", ".join(sel)}
-  from jp {elig_join}""").fetchall()
+         jp.datasetKey, {specimen_cols}, {", ".join(sel)}
+  from jp {elig_join}""" + (" order by jp.gbifID nulls last" if "gbifID" in jp_cols else "")).fetchall()
 audit = gate.audit((r[1], r[0], r[6], r[3]) for r in rows)
-recs = [r for r in rows if gate.is_public(species=r[1], species_key=r[0], genus=r[6], taxon_rank=r[3])]
+# TASK-014: dedup on the normalised specimen pair after the gbifID-ordered fetch, before
+# any counting; rows without a usable pair (either side empty) each count.
+recs, seen_pair, xdupes = [], set(), 0
+for r in rows:
+    if not gate.is_public(species=r[1], species_key=r[0], genus=r[6], taxon_rank=r[3]): continue
+    pair = specimen_key(r[14], r[15])
+    if pair is not None:
+        if pair in seen_pair:
+            xdupes += 1
+            continue
+        seen_pair.add(pair)
+    recs.append(r)
 masked = len(rows) - audit["public"]
 
 islands = list(csv.DictReader(open(a.islands)))
@@ -146,7 +176,7 @@ area_recs = defaultdict(list)       # area -> records
 fam_class = defaultdict(Counter)
 cell_area, tile_prefs = {}, defaultdict(Counter)
 for r in recs:
-    key, sp, fam, rank, bor, cls, gen, lat, lon, mon, yr, loc, prov, dsk, unc, prec, iss, genz, held = r
+    key, sp, fam, rank, bor, cls, gen, lat, lon, mon, yr, loc, prov, dsk, inst, cat, unc, prec, iss, genz, held = r
     fam_class[fam or ""][cls] += 1
     kd = kind(cls, fam, gen or (sp or "").split(" ")[0])
     cell = mesh_cell(lat, lon)
@@ -358,5 +388,6 @@ write_json(os.path.join(a.out, "index.json"),
             "masked_records": masked, "has_habitat": False, "has_neighbours": "ea" in tables})
 print(f"{len(index)} areas ({sum(1 for x in index if x['kind']=='island')} islands), {len(cell_area)} squares mapped, "
       f"{masked} sensitive records excluded, precision flags applied={sum(x != 'null' for x in sel)}/5, "
-      f"neighbours={'ea' in tables}, dominant_source on {sum(1 for x in built.values() if 'dominant_source' in x)} area(s)")
+      f"neighbours={'ea' in tables}, dominant_source on {sum(1 for x in built.values() if 'dominant_source' in x)} area(s), "
+      f"cross-dataset duplicates removed: {xdupes}")
 print(f"gate audit (aggregate): {audit}")

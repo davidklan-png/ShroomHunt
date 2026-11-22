@@ -14,7 +14,11 @@ Definitions this module owns (§7 gates the dashboard UI trusts):
   table actually carries: jp.gbifID when present (every GBIF SIMPLE_CSV build
   has it), else jp.occurrenceID. Duplicates are exact repeats of one source
   record, so the first copy in gbifID order wins; a null ID identifies
-  nothing and each such row counts once.
+  nothing and each such row counts once. A second key catches one specimen
+  published by two datasets (TASK-014): rows sharing a normalised
+  (institutionCode, catalogNumber) are duplicates of the first in the same
+  order, and an empty catalogNumber identifies nothing, so those rows each
+  count.
 * A sampling event is a distinct non-null (datasetKey, eventID) pair; when a
   record's eventID is missing, (datasetKey, recordedBy) stands in for that
   record. Records with neither contribute no event.
@@ -68,7 +72,7 @@ from public_taxa import load_gate  # noqa: E402
 from eligibility import precision_selection, spatially_eligible  # noqa: E402
 from snapshot import write_json  # noqa: E402
 
-# kind() and its tables are copied verbatim from build_areas.py: its top-level
+# kind() and specimen_key() are copied verbatim from build_areas.py: its top-level
 # CLI makes a clean import impossible. Keep the two copies in sync (§5 row 3A
 # says reuse the classifier, never fork it silently).
 MACRO_CLASSES = {"Agaricomycetes", "Pezizomycetes", "Dacrymycetes"}
@@ -83,6 +87,14 @@ def kind(cls, fam, genus):
     if cls in LICHEN_CLASSES or fam in LICHEN_FAMILIES: return "l"
     if cls in MACRO_CLASSES or genus in MACRO_GENERA: return "m"
     return "o"
+
+def specimen_key(inst, cat):
+    """Normalised (institutionCode, catalogNumber) — strip, casefold, collapse internal
+    whitespace — or None when either side is empty: one physical specimen published by
+    two datasets counts once (TASK-014); an empty catalogNumber identifies nothing."""
+    def norm(v): return " ".join(str(v).split()).casefold() if v is not None else ""
+    i, c = norm(inst), norm(cat)
+    return (i, c) if i and c else None
 
 MIN_RECORDS, MIN_EVENTS, MIN_SHARE_SIDE = 10, 3, 5
 GENUS_MIN_RECORDS, GENUS_MIN_CELLS, GENUS_MIN_EVENTS = 10, 3, 3
@@ -114,7 +126,8 @@ rows = c.execute(f"""
          {col('class')}, {col('basisOfRecord')}, try_cast({col('month')} as int),
          try_cast({col('decimalLatitude')} as double), try_cast({col('decimalLongitude')} as double),
          {col('datasetKey')}, {col('eventID')},
-         {col('recordedBy')}, {col(DEDUP) if DEDUP else 'null'}, {", ".join(sel)}
+         {col('recordedBy')}, {col(DEDUP) if DEDUP else 'null'},
+         {col('institutionCode')}, {col('catalogNumber')}, {", ".join(sel)}
   from jp {elig_join}""" + (f" order by jp.{DEDUP} nulls last" if DEDUP else "")).fetchall()
 audit = gate.audit((r[1], r[0], r[2], r[4]) for r in rows)
 
@@ -122,14 +135,21 @@ audit = gate.audit((r[1], r[0], r[2], r[4]) for r in rows)
 slices = defaultdict(lambda: defaultdict(lambda: [0, set(), 0]))   # (month, kind) -> cell -> [n, events, genus-rank n]
 genus_hits = defaultdict(list)                                     # folded genus -> [(cellkey, event)]
 seen, dupes = set(), 0
+pairs, xdupes = set(), 0                                           # TASK-014 cross-dataset specimen pairs
 for r in rows:
-    sk, sp, gen, fam, rank, cls, bor, mon, lat, lon, dsk, eid, rby, sid, unc, prec, iss, genz, held = r
+    sk, sp, gen, fam, rank, cls, bor, mon, lat, lon, dsk, eid, rby, sid, inst, cat, unc, prec, iss, genz, held = r
     if sid is not None and str(sid).strip():
         s = str(sid).strip()
         if s in seen:
             dupes += 1
             continue
         seen.add(s)
+    pair = specimen_key(inst, cat)
+    if pair is not None:
+        if pair in pairs:
+            xdupes += 1
+            continue
+        pairs.add(pair)
     if not gate.is_public(species=sp, species_key=sk, genus=gen, taxon_rank=rank): continue
     cell = mesh_cell(lat, lon)
     if cell is None or not spatially_eligible(unc, prec, iss, genz, held): continue
@@ -223,5 +243,6 @@ slices_out = [[m, k, [[key, *bands] for key, bands in sorted(cells_.items(), key
                                            key=lambda item: (item[0][0], KIND_ORDER.index(item[0][1])))]
 write_json(a.out, {"schema_version": 1, "snapshot": "", "slices": slices_out, "genera": genera})
 print(f"wrote {a.out}: {len(slices_out)} slices, {sum(len(s[2]) for s in slices_out)} cell entries, "
-      f"{len(genera)} genera; dedupe key {DEDUP or 'none'} skipped {dupes} duplicate source records")
+      f"{len(genera)} genera; dedupe key {DEDUP or 'none'} skipped {dupes} duplicate source records, "
+      f"cross-dataset duplicates removed: {xdupes}")
 print(f"gate audit (aggregate): {audit}; genera dropped: {dropped_genera}")

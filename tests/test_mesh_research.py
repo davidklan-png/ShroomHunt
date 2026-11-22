@@ -295,6 +295,58 @@ class OccurrenceIDDedupe(unittest.TestCase):
         self.assertEqual(doc["slices"], [])                    # 9 after dedupe: no supported cell anywhere
 
 
+class CrossDatasetDeduplication(unittest.TestCase):
+    """TASK-014: one physical specimen published by two datasets — different gbifIDs,
+    same normalised (institutionCode, catalogNumber) — counts once in every slice;
+    an empty catalogNumber identifies nothing, so those rows each count."""
+
+    def test_specimen_pair_counts_once_and_empty_catalog_numbers_count(self):
+        tmp = tempfile.mkdtemp()
+        db = os.path.join(tmp, "xdup.duckdb")
+        c = duckdb.connect(db)
+        c.execute(f"create table jp({COLS}, institutionCode varchar, catalogNumber varchar)")
+        rows = []
+
+        def xrec(gbif, lat, month, ev, inst, cat, dataset="dx"):
+            r = list(rec(gbif, lat, 127.7, month, ev))
+            r[16] = dataset
+            return tuple(r) + (inst, cat)
+
+        # cell A month 3: 23 distinct specimens + the same S-NET collection object twice
+        # (two gbifIDs, two datasetKeys, different case/spacing) -> 24 records, band 0;
+        # counting the duplicate too would read 25 and cross into band 1
+        rows += [xrec(f"X{i}", 26.1, 3, f"e{i % 3 + 1}", "XNET", f"x{i}") for i in range(23)]
+        rows += [xrec("D1", 26.1, 3, "e2", "S-NET", "AB 7"),
+                 xrec("D2", 26.1, 3, "e2", " s-net ", "ab  7", dataset="dy")]
+        # cell A month 5: 8 distinct + one twice-published specimen -> 9: below support;
+        # counting the duplicate would read 10 and ship the slice
+        rows += [xrec(f"Z{i}", 26.1, 5, f"e{i % 3 + 1}", "ZNET", f"z{i}") for i in range(8)]
+        rows += [xrec("F1", 26.1, 5, "e1", "FNET", "f-1"),
+                 xrec("F2", 26.1, 5, "e1", "fnet ", "F-1", dataset="dy")]
+        # cell B month 6: two records share an institutionCode with no catalogNumber:
+        # no pair, so both count and the cell ships on exactly 10
+        rows += [xrec(f"B{i}", 26.2, 6, f"e{i % 3 + 1}", "BNET", f"b{i}") for i in range(8)]
+        rows += [xrec("E1", 26.2, 6, "e1", "S-NET", ""), xrec("E2", 26.2, 6, "e2", "S-NET", None)]
+        c.executemany("insert into jp values (" + ",".join(["?"] * 24) + ")", rows)
+        c.close()
+        out = os.path.join(tmp, "research.json")
+        r = run_builder("build_mesh_research.py", "--db", db, "--out", out,
+                        "--islands", os.path.join(FIX, "islands.csv"),
+                        "--taxon-names", os.path.join(tmp, "none.csv"),
+                        "--mask", os.path.join(FIX, "taxon_mask.csv"),
+                        "--coverage", write_coverage(tmp),
+                        "--exceptions", os.path.join(FIX, "match_exceptions.csv"),
+                        "--redlist", os.path.join(FIX, "redlist.json"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("cross-dataset duplicates removed: 2", r.stdout)
+        with open(out) as f:
+            sm = slice_map(json.load(f))
+        self.assertEqual(sm[(3, "all")], {A: (0, None)})      # 24 after dedup: band 0, not 25's band 1
+        self.assertNotIn((5, "all"), sm)                      # 9 after dedup: below support, slice withheld
+        self.assertEqual(sm[(6, "all")], {B: (0, None)})      # empty catalogNumbers each counted: 10 ship
+        self.assertEqual(sm[(0, "all")], {A: (1, None), B: (0, None)})   # 33 and 10 land in month 0
+
+
 class Month0Support(unittest.TestCase):
     """a0c988a: no per-cell month-0 withholding. Bands are >=15 wide over a
     >=10-record support floor, so even 11 published months leave the unknown
