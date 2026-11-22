@@ -25,7 +25,7 @@ ShroomHunt/
 ## Running
 
 ```
-/opt/homebrew/bin/python3.12 -m venv .venv && .venv/bin/pip install duckdb==1.1.3
+/opt/homebrew/bin/python3.12 -m venv .venv && .venv/bin/pip install duckdb==2.0.1
 .venv/bin/python -m unittest discover -s tests -p 'test_*.py'    # what CI and verify.sh run
 ```
 
