@@ -1,44 +1,34 @@
 # ShroomHunt
 
-Research tool for documenting Japan's fungal diversity and pointing fieldwork at likely native, endemic or undescribed taxa.
-Start with **docs/architecture-decisions.md**.
+Research tool for documenting Japan's fungal diversity and pointing fieldwork at likely native, endemic or undescribed taxa. Start with **docs/architecture-decisions.md**; the map work is specified in **docs/map-improvement-plan.md**.
+
+The published dashboard lives in the Bio_HP site (kinokoholic.com). This repo builds the data bundle under a shared protection gate (`pipeline/public_taxa.py`) and ships it there.
 
 ## Folder layout
 ```
 ShroomHunt/
-├── app/index.html                   current web app (published as "Forage Season Finder")
+├── app/index.html       legacy foraging page ("Forage Season Finder") — superseded, kept for reference
 ├── data/
-│   ├── raw/                         downloads go here: never edited, never committed
-│   │   ├── mushroomobserver/        ← PUT THE MUSHROOM OBSERVER CSVs HERE
-│   │   ├── gbif/                    ← filled by pipeline/gbif_request.py
-│   │   └── inaturalist/             (optional, see docs/sources.md)
-│   ├── reference/species_traits.csv the curated layer: edibility, lookalikes, habitat (hand-maintained)
-│   └── processed/seasonality.json   generated: species → map cell / country → 12 monthly counts
-├── pipeline/
-│   ├── gbif_request.py              downloads all Japanese fungus records + a neighbouring-country species list
-│   ├── inspect_raw.py               prints the columns of every raw file → docs/raw_schema.md
-│   └── build_seasonality.py         (foraging version: to be replaced by the research database build)
-└── docs/sources.md                  every data source considered, with licence and verdict
+│   ├── raw/             downloads: never edited, never committed (gitignored)
+│   ├── reference/       hand-maintained curated layer: taxon_mask.csv (species-level
+│   │                    protection list, aliases included), taxon_names.csv (reviewed
+│   │                    genus-search table), islands.csv, match_exceptions.csv
+│   └── processed/       generated bundles (staging → Bio_HP)
+├── pipeline/            duckdb build: build_db → build_dashboard_data → build_areas →
+│                        build_mesh_research; public_taxa.py is the protection gate every
+│                        output passes; validate_dashboard_publish.py gates each publish
+├── analysis/            SQL steps feeding the builders
+├── tests/               stdlib unittest suite (fixtures only — no raw data needed)
+└── docs/                architecture decisions, map plan, sources
 ```
 
-## Steps (from Terminal, in this folder)
-1. **Mushroom Observer** (optional now, mostly North American): download these into `data/raw/mushroomobserver/`:
-   - https://mushroomobserver.org/observations.csv
-   - https://mushroomobserver.org/names.csv
-   - https://mushroomobserver.org/locations.csv
+## Running
 
-   ```
-   cd data/raw/mushroomobserver
-   for f in observations names locations; do curl -LO https://mushroomobserver.org/$f.csv; done
-   cd ../../..
-   ```
-2. **GBIF: do this first.** It includes S-Net museum specimens, iNaturalist research-grade sightings and DNA-derived records: create a free account at gbif.org, then
-   ```
-   export GBIF_USER=... GBIF_PWD=... GBIF_EMAIL=...
-   python3 pipeline/gbif_request.py
-   ```
-   It can take from minutes to a few hours. GBIF emails you when it's ready, and the script keeps waiting.
-3. `python3 pipeline/inspect_raw.py`, then tell Claude it's done. The Mushroom Observer loader gets finished once its real columns are known.
-4. `python3 pipeline/build_seasonality.py`
+```
+/opt/homebrew/bin/python3.12 -m venv .venv && .venv/bin/pip install duckdb==1.1.3
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py'    # what CI and verify.sh run
+```
 
-Needs only Python 3. No packages to install.
+Data refreshes run on GitHub Actions: `.github/workflows/fetch-data.yml` (GBIF download → release assets) then `publish-dashboard.yml` (build → validate → Bio_HP data PR). `tests.yml` runs the suite on every push/PR. Manual GBIF download: `pipeline/gbif_request.py` (needs GBIF_USER, GBIF_PWD, GBIF_EMAIL).
+
+Mushroom Observer is optional and low priority (decision D10); the loader stays in the repo.

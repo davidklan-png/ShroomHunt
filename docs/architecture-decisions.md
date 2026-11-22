@@ -16,7 +16,7 @@ where (with uncertainty), what kind of evidence (specimen / photo / DNA), vouche
 - *Future impact:* storage grows to millions of rows, so expect SQLite/DuckDB instead of JSON files. The app then reads
   query results rather than one bundled file.
 
-### D2. Evidence tiers drive every claim (Proposed)
+### D2. Evidence tiers drive every claim (Decided)
 | Tier | Evidence | Can support |
 |---|---|---|
 | A | Specimen in a public fungarium **plus** a DNA sequence (ITS barcode) | New records for Japan, candidate new species |
@@ -27,6 +27,9 @@ where (with uncertainty), what kind of evidence (specimen / photo / DNA), vouche
 *Why it matters:* a new species can't be established from observations. It needs a preserved type specimen
 in a public collection, DNA, and a formal published description. The tool's job is to **find where to look and
 which records to verify**. It cannot make the discovery itself. AI-generated species lists ("Ask Claude") are tier D and stay out of research outputs.
+- *Applied in code (2026-11-22):* every record carries an evidence code (s specimen / o observation /
+  d DNA sample); month histograms count fruiting evidence only, so DNA sampling never shows up
+  as phenology.
 
 ### D3. DNA is part of the core design (Proposed)
 - **UNITE** clusters all public fungal ITS sequences into "species hypotheses" (SHs), each with a DOI, including
@@ -48,10 +51,16 @@ Analyse on the JIS X 0410 地域メッシュ (2nd mesh ≈ 10 km). It's the grid
 so results line up with Ministry of the Environment layers. Raw coordinates are always kept.
 *Replaces* the 1° (~111 km) cells used for the foraging version.
 
-### D6. Protect sensitive locations (Proposed)
+### D6. Protect sensitive locations (Decided)
 Mask exact coordinates of Red List fungi (Endangered species list of Fungi in Japan 2020, on GBIF)
-and of commercially poached species (e.g. matsutake) in anything shared. S-Net already masks Red List localities
-before publishing, so the same rule keeps our outputs consistent with theirs.
+and of commercially poached/collected species (`data/reference/taxon_mask.csv`) in anything shared.
+S-Net already masks Red List localities before publishing, so the same rule keeps our outputs
+consistent with theirs.
+- **Species-level only (David, 2026-11-22):** a masked taxon is a species — matched by accepted
+  name *and its aliases* (e.g. Ganoderma lingzhi / G. sichuanense for G. lucidum) — never a
+  genus. Genus-rank records publish and no genus is excluded from Name search.
+- Genus search labels never name a masked species ("matsutake" must not surface Tricholoma
+  areas): `taxon_names.csv` carries genus-level terms only.
 
 ### D7. The analyses ("discovery engine") (Proposed, in priority order)
 1. **Known next door, not in Japan:** fungi recorded in China, Korea, Taiwan or the Russian Far East with no Japanese record.
