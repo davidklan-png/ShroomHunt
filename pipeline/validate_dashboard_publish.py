@@ -3,7 +3,7 @@
 directory before anything is cloned or copied to Bio_HP.
 
 Usage: python3 pipeline/validate_dashboard_publish.py <staging-dir> \
-         [--mask ...] [--coverage ...] [--exceptions ...] [--redlist ...]
+         [--mask ...] [--coverage ...] [--exceptions ...] [--redlist ...] [--col-mask-map ...]
 
 Exit 0 = publishable. Exit 1 = NOT publishable, with every reason on stderr.
 
@@ -28,10 +28,12 @@ Checks:
               detail file ids == groups' members; cells values are island/tile
               ids present in the index; outline places[].area_id (when set)
               exists in the index;
-  gate        public_taxa.load_gate() is rerun against the reference inputs;
-              no masked/quarantined name may appear in any species/candidate/
-              lead list (offenders are named by position, never by taxon —
-              protected names stay out of logs);
+  gate        public_taxa.load_gate() is rerun against the reference inputs,
+              col_mask_map included (TASK-018: it is a required input here, so
+              CI cannot publish without it); no masked/quarantined name and no
+              masked COL key may appear in any species/candidate/lead list
+              (offenders are named by position, never by taxon — protected
+              names stay out of logs);
   prose       no habitat/locality/elevation prose: withdrawn fields must be
               empty and no string may match the known prose fixture patterns;
   budget      gzip-9 size caps per file (§6 table);
@@ -77,8 +79,8 @@ INDEX_ROW = AREA_BASE | {"records", "species"}
 AREA_FILE = AREA_BASE | {"schema_version", "snapshot", "totals", "months", "top_localities",
                          "species", "possible"}
 GROUP_FILE = AREA_FILE | {"members", "member_names"}
-RECORDED = {"n", "f", "k", "r", "m", "sq", "y", "e", "h", "l", "nm", "el"}
-CANDIDATE = {"n", "f", "k", "s", "d", "w", "wj", "m"}
+RECORDED = {"n", "c", "f", "k", "r", "m", "sq", "y", "e", "h", "l", "nm", "el"}
+CANDIDATE = {"n", "c", "f", "k", "s", "d", "w", "wj", "m"}
 OUTLINE_KEYS = {"schema_version", "source", "bbox", "land", "places"}
 RESEARCH_KEYS = {"schema_version", "snapshot", "slices", "genera"}
 
@@ -139,11 +141,11 @@ def check_dashboard(d, path, reasons):
                 and is_uint(row[2]) and is_uint(row[3])):
             reasons.append(f"{keys}: mesh[{i}] is not a §6 MeshRow [center_lat, center_lon, records, species]")
     for i, row in enumerate(d["leads"]):
-        if not (isinstance(row, list) and len(row) == 5 and isinstance(row[0], str)
+        if not (isinstance(row, list) and len(row) == 6 and isinstance(row[0], str)
                 and (row[1] is None or isinstance(row[1], str)) and is_uint(row[2]) and is_uint(row[3])
-                and isinstance(row[4], str)):
+                and isinstance(row[4], str) and (row[5] is None or isinstance(row[5], str))):
             reasons.append(f"{keys}: leads[{i}] is not [species, family|null, neighbour_records, "
-                           f"mo_records, triage_hint]")
+                           f"mo_records, triage_hint, col_key|null]")
     if set(d["lead_totals"]) != {"candidates", "with_mo", "with_unresolved_jp_genus"} \
             or not all(is_uint(v) for v in d["lead_totals"].values()):
         reasons.append(f"{keys}: lead_totals is not the three §6 UInt fields")
@@ -269,6 +271,7 @@ def check_area_file(f, path, reasons, ids):
             reasons.append(f"{keys}: species[{i}] key set != §6 RecordedRow")
             continue
         if not (isinstance(s["n"], str) and s["n"] and isinstance(s["f"], str) and s["k"] in KINDS
+                and (s["c"] is None or isinstance(s["c"], str))      # TASK-018 COL key, nullable
                 and is_uint(s["r"]) and is_bins12(s["m"]) and is_uint(s["sq"])
                 and (s["y"] is None or (isinstance(s["y"], list) and len(s["y"]) == 2
                                         and all(is_uint(x) for x in s["y"]) and s["y"][0] <= s["y"][1]))
@@ -286,6 +289,7 @@ def check_area_file(f, path, reasons, ids):
             reasons.append(f"{keys}: possible[{i}] key set != §6 CandidateRow")
             continue
         if not (isinstance(p["n"], str) and p["n"] and isinstance(p["f"], str) and p["k"] in KINDS
+                and (p["c"] is None or isinstance(p["c"], str))      # TASK-018 COL key, nullable
                 and is_uint(p["s"]) and 1 <= p["s"] <= 100 and p["d"] in BANDS
                 and isinstance(p["w"], str) and isinstance(p["wj"], str) and is_bins12(p["m"])
                 and (kind != "group" or p["i"] in f["members"])):
@@ -379,19 +383,25 @@ def iter_strings(obj):
 
 
 def gate_scan(docs, gate, reasons):
-    """No masked/quarantined name in any species/candidate/lead list. Listed names are
-    all identified-to-species rows, so they classify with taxon_rank SPECIES (genera
-    lists with GENUS), exactly like the builders' semantics."""
+    """No masked/quarantined name and no masked COL key in any species/candidate/lead
+    list. Listed names are all identified-to-species rows, so they classify with
+    taxon_rank SPECIES (genera lists with GENUS), exactly like the builders'
+    semantics; "c" col-key fields and the leads' appended col_key classify by key."""
 
     def listed(name, rank):
         return gate.classify(species=name, taxon_rank="SPECIES") if rank == "SPECIES" \
             else gate.classify(genus=name, taxon_rank="GENUS")
+
+    def col_listed(key):
+        return key is not None and str(key) in gate.keys
 
     for path, doc in docs.items():
         if path == "dashboard.json" and isinstance(doc, dict):
             for i, row in enumerate(doc.get("leads", []) if isinstance(doc.get("leads"), list) else []):
                 if isinstance(row, list) and row and listed(row[0], "SPECIES"):
                     reasons.append(f"protected taxon: {path}: leads[{i}] is masked or quarantined by the gate")
+                if isinstance(row, list) and len(row) == 6 and col_listed(row[5]):
+                    reasons.append(f"protected taxon: {path}: leads[{i}] carries a masked col_key")
             for i, row in enumerate(doc.get("unresolved_genera", [])
                                     if isinstance(doc.get("unresolved_genera"), list) else []):
                 if isinstance(row, list) and row and listed(row[0], "GENUS"):
@@ -400,9 +410,13 @@ def gate_scan(docs, gate, reasons):
             for i, s in enumerate(doc.get("species", []) if isinstance(doc.get("species"), list) else []):
                 if isinstance(s, dict) and listed(s.get("n"), "SPECIES"):
                     reasons.append(f"protected taxon: {path}: species[{i}] is masked or quarantined by the gate")
+                if isinstance(s, dict) and col_listed(s.get("c")):
+                    reasons.append(f"protected taxon: {path}: species[{i}] carries a masked col_key")
             for i, p in enumerate(doc.get("possible", []) if isinstance(doc.get("possible"), list) else []):
                 if isinstance(p, dict) and listed(p.get("n"), "SPECIES"):
                     reasons.append(f"protected taxon: {path}: possible[{i}] is masked or quarantined by the gate")
+                if isinstance(p, dict) and col_listed(p.get("c")):
+                    reasons.append(f"protected taxon: {path}: possible[{i}] carries a masked col_key")
         elif path == "mesh-research.json" and isinstance(doc, dict):
             for i, row in enumerate(doc.get("genera", []) if isinstance(doc.get("genera"), list) else []):
                 if isinstance(row, list) and row and listed(row[0], "GENUS"):
@@ -550,8 +564,11 @@ def main(argv=None):
     ap.add_argument("--coverage", default="data/reference/redlist_coverage.csv")
     ap.add_argument("--exceptions", default="data/reference/match_exceptions.csv")
     ap.add_argument("--redlist", default="data/raw/redlist/redlist_fungi_jp.json")
+    ap.add_argument("--col-mask-map", default="data/reference/col_mask_map.csv",
+                    help="required input (TASK-018): COL XR mask map; missing blocks validation")
     args = ap.parse_args(argv)
     gate_args = {k: getattr(args, k) for k in ("mask", "coverage", "exceptions", "redlist")}
+    gate_args["col_mask"] = args.col_mask_map
     reasons, gz = validate(args.staging, gate_args)
     if reasons:
         print(f"{args.staging}: NOT publishable — {len(reasons)} reason(s):", file=sys.stderr)

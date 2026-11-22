@@ -565,7 +565,8 @@ class EndToEndBundle(unittest.TestCase):
         cls.refs = ["--mask", os.path.join(FIX, "taxon_mask.csv"),
                     "--coverage", write_coverage(cls.tmp),
                     "--exceptions", os.path.join(FIX, "match_exceptions.csv"),
-                    "--redlist", os.path.join(FIX, "redlist.json")]
+                    "--redlist", os.path.join(FIX, "redlist.json"),
+                    "--col-mask-map", os.path.join(FIX, "col_mask_map.csv")]
         cls.db = os.path.join(cls.tmp, "scratch.duckdb")
         cls.staging = os.path.join(cls.tmp, "staging")
         os.makedirs(cls.staging)

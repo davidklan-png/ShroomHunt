@@ -83,7 +83,7 @@ class CrossDatasetDeduplication(unittest.TestCase):
         self.assertEqual(d["mesh"], [[*cell_center(313, 1021), 4, 1]])
         # leads: the neighbour SQL read the deduped jp — Leadus candidus's only jp record
         # was a dropped duplicate half, so it counts as unrecorded in Japan
-        self.assertEqual(d["leads"], [["Leadus candidus", "Fictaceae", 77, 1, "genus unrecorded in Japan"]])
+        self.assertEqual(d["leads"], [["Leadus candidus", "Fictaceae", 77, 1, "genus unrecorded in Japan", None]])
         self.assertEqual(d["lead_totals"], {"candidates": 1, "with_mo": 1,
                                             "with_unresolved_jp_genus": 0})
 

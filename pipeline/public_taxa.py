@@ -13,13 +13,17 @@ Reviewed inputs (data/reference/, see also the seed files there):
 
 Fail-closed: a missing mask, missing/empty/mismatched coverage manifest or
 missing Red List download raises PublicTaxaError before anything is written.
+The same holds for the COL XR mask map (data/reference/col_mask_map.csv,
+TASK-018) — but only when one is requested (col_mask=...), i.e. during a
+--col-map-keyed build or a publication check; legacy builds load without it.
 
-A record is masked when its taxon key, or its accepted/alias/verbatim name,
-resolves to a masked taxon (Red List names count, including infraspecific
-prefixes). Red List entries matched fuzzily by fetch_redlist.py are treated as
-ambiguous and quarantined by name. Records not identified to species rank in a
-masked genus are quarantined: the finer identity cannot rule out a protected
-taxon. Audit output is aggregate counts only, never per-taxon names.
+A record is masked when its taxon key, its COL XR key (col_key), or its
+accepted/alias/verbatim name resolves to a masked taxon (Red List names count,
+including infraspecific prefixes). Red List entries matched fuzzily by
+fetch_redlist.py are treated as ambiguous and quarantined by name. Records not
+identified to species rank in a masked genus are quarantined: the finer
+identity cannot rule out a protected taxon. Audit output is aggregate counts
+only, never per-taxon names.
 
 Regenerate the coverage row after a fresh Red List download:
   python3 pipeline/public_taxa.py data/raw/redlist/redlist_fungi_jp.json >> data/reference/redlist_coverage.csv
@@ -95,14 +99,18 @@ class Gate:
             if " " in n:
                 self._binomials.setdefault(n.split()[0], set()).add(n)
 
-    def classify(self, species=None, species_key=None, genus=None, taxon_rank=None):
+    def classify(self, species=None, species_key=None, genus=None, taxon_rank=None, col_key=None):
         """Why this record is masked: 'key', 'name', 'ambiguous', or None if public.
 
         Species-level masking only (David's ruling, 2026-11-22): a record masks when
         it IS the protected taxon (key, name/alias, ambiguous match, or an
         infraspecific form of a masked binomial). Genus-rank records publish —
-        masking a whole genus for one protected species was rejected."""
+        masking a whole genus for one protected species was rejected.
+        col_key (TASK-018) masks on the COL XR accepted id, so a synonym record
+        whose legacy key and backbone name both differ still masks."""
         if species_key is not None and str(species_key) in self.keys:
+            return "key"
+        if col_key is not None and str(col_key) in self.keys:
             return "key"
         n = _fold(species)
         if n:
@@ -115,14 +123,14 @@ class Gate:
                 return "name"  # infraspecific/null-key form of a masked binomial
         return None
 
-    def is_public(self, species=None, species_key=None, genus=None, taxon_rank=None):
-        return self.classify(species, species_key, genus, taxon_rank) is None
+    def is_public(self, species=None, species_key=None, genus=None, taxon_rank=None, col_key=None):
+        return self.classify(species, species_key, genus, taxon_rank, col_key) is None
 
     def audit(self, rows):
-        """Aggregate counts for (species, key, genus, rank) tuples. No taxon names."""
+        """Aggregate counts for (species, key, genus, rank[, col_key]) tuples. No names."""
         counts = {"public": 0, "masked_key": 0, "masked_name": 0, "quarantined_ambiguous": 0}
-        for species, key, genus, rank in rows:
-            reason = self.classify(species, key, genus, rank)
+        for species, key, genus, rank, *col in rows:
+            reason = self.classify(species, key, genus, rank, col[0] if col else None)
             counts["public" if reason is None else
                    {"key": "masked_key", "name": "masked_name",
                     "ambiguous": "quarantined_ambiguous"}[reason]] += 1
@@ -140,8 +148,10 @@ class Gate:
         con.executemany("insert into sens_prefix values (?)", [(p,) for p in prefixes])
 
     def sql_where(self, t="jp"):
-        """SQL predicate over a table/alias with speciesKey/species/genus/taxonRank columns."""
+        """SQL predicate over a table/alias with speciesKey/species/genus/taxonRank columns
+        (TASK-018: and col_key, which build_dashboard_data.py guarantees via col_xr.ensure)."""
         return (f"(coalesce({t}.speciesKey::varchar, '') not in (select k from sens)"
+                f" and coalesce({t}.col_key, '') not in (select k from sens)"
                 f" and lower(coalesce({t}.species, '')) not in (select name from sens_names)"
                 f" and not exists (select 1 from sens_prefix p"
                 f"                 where lower(coalesce({t}.species, '')) like p.name || ' %'))")  # noqa: F541
@@ -149,8 +159,13 @@ class Gate:
 
 def load_gate(mask="data/reference/taxon_mask.csv", coverage="data/reference/redlist_coverage.csv",
               exceptions="data/reference/match_exceptions.csv",
-              redlist="data/raw/redlist/redlist_fungi_jp.json"):
-    """Build the gate from reviewed inputs; raises PublicTaxaError on anything absent or partial."""
+              redlist="data/raw/redlist/redlist_fungi_jp.json", col_mask=None):
+    """Build the gate from reviewed inputs; raises PublicTaxaError on anything absent or partial.
+
+    col_mask (TASK-018): path to data/reference/col_mask_map.csv, passed only when a
+    --col-map-keyed build or a publication check is in progress. Its COL keys join
+    Gate.keys and its COL accepted names join masked_names; a missing or empty file
+    blocks. None (legacy builds, fixtures) loads the gate unchanged."""
     mask_rows = _read_csv(mask, "commercial taxon mask")
     mask_rows = [r for r in mask_rows if r.get("scientific_name", "").strip()]
     if not mask_rows:
@@ -190,6 +205,16 @@ def load_gate(mask="data/reference/taxon_mask.csv", coverage="data/reference/red
             g.keys -= {str(s["speciesKey"]) for s in species if _fold(s["name"]) == _fold(name)}
         else:
             raise PublicTaxaError(f"match-exception manifest has unknown action {action!r} for {name!r}")
+    if col_mask is not None:
+        col_rows = [r for r in _read_csv(col_mask, "col_mask_map")
+                    if (r.get("value") or "").strip()]
+        if not col_rows:
+            raise PublicTaxaError(f"col_mask_map has no rows: {col_mask}")
+        for r in col_rows:
+            k = (r.get("col_key") or "").strip()
+            if k:
+                g.keys.add(k)                      # COL ids mask alongside the legacy keys
+            g._add_name(r.get("col_accepted_name"))
     g._rebuild_derived()
     return g
 
