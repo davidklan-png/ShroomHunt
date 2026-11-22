@@ -49,6 +49,12 @@ jobs:
       - run: pip install duckdb==1.1.3
         if: ${{ inputs.geography_only != true }}
 
+      - name: Run test suite
+        # the same suite handoff/verify.sh and tests.yml run: nothing builds or
+        # publishes while a test fails (the fixtures are self-contained).
+        if: ${{ inputs.geography_only != true }}
+        run: python -m unittest discover -s tests -p 'test_*.py'
+
       - name: Download newest data releases
         if: ${{ inputs.geography_only != true }}
         env:

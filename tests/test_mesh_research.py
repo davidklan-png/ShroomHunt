@@ -398,10 +398,13 @@ class SeededTaxonNames(unittest.TestCase):
         with open(os.path.join(REPO, "data", "reference", "taxon_names.csv"),
                   newline="", encoding="utf-8") as f:
             cls.rows = list(csv.DictReader(ln for ln in f if not ln.lstrip().startswith("#")))
+        # the raw Red List is private/gitignored (absent on a fresh clone and in CI), so
+        # the gate pairs the real committed mask/exceptions with the fixture Red List and
+        # the coverage manifest write_coverage derives from it.
         cls.gate = load_gate(mask=os.path.join(REPO, "data", "reference", "taxon_mask.csv"),
-                             coverage=os.path.join(REPO, "data", "reference", "redlist_coverage.csv"),
+                             coverage=write_coverage(tempfile.mkdtemp()),
                              exceptions=os.path.join(REPO, "data", "reference", "match_exceptions.csv"),
-                             redlist=os.path.join(REPO, "data", "raw", "redlist", "redlist_fungi_jp.json"))
+                             redlist=os.path.join(FIX, "redlist.json"))
 
     @staticmethod
     def names_of(row):

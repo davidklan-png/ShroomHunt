@@ -1,0 +1,22 @@
+# The suite on every push/PR to main — the same command handoff/verify.sh runs.
+# Stdlib unittest only (no pytest); duckdb is the single dependency.
+name: Tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install duckdb==1.1.3
+      - run: python -m unittest discover -s tests -p 'test_*.py'
