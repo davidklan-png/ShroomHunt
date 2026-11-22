@@ -102,3 +102,13 @@ class MainFailsClosed(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class NormRepo(unittest.TestCase):
+    def test_accepts_url_and_git_forms(self):
+        from pipeline.fetch_latest_release_assets import norm_repo
+        for form in ("davidklan-png/ShroomHunt-staging",
+                     "https://github.com/davidklan-png/ShroomHunt-staging",
+                     "https://github.com/davidklan-png/ShroomHunt-staging.git",
+                     "git@github.com:davidklan-png/ShroomHunt-staging.git"):
+            self.assertEqual(norm_repo(form), "davidklan-png/ShroomHunt-staging", form)
+        self.assertEqual(norm_repo(""), "")

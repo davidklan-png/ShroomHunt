@@ -16,6 +16,12 @@ PREFIXES = {"japan_": ("data/raw/gbif", True), "neighbours_": ("data/raw/gbif", 
 class StagingError(Exception):
     """Fail-closed problem with the source repo or its releases; the message is user-facing."""
 
+def norm_repo(r):
+    """Accept owner/name, full URL or git URL — humans paste all three."""
+    import re
+    r = re.sub(r"^.*github\.com[:/]", "", (r or "").strip().rstrip("/"))
+    return r[:-4] if r.endswith(".git") else r
+
 def matches(name, p):
     return re.match(re.escape(p) + (r"\d" if p.endswith("_") else ""), name) is not None
 
@@ -60,7 +66,7 @@ def main():
     ap.add_argument("--verify-destination", action="store_true",
                     help="only check the repo is reachable and private, then exit (no download)")
     a = ap.parse_args()
-    repo = a.repo or a.pos_repo or os.environ.get("STAGING_REPO")
+    repo = norm_repo(a.repo or a.pos_repo or os.environ.get("STAGING_REPO"))
     token = a.token or os.environ.get("STAGING_TOKEN") or os.environ.get("GH_TOKEN")
     if not repo: sys.exit("No source repo configured: pass --repo or set STAGING_REPO "
                           "(see docs/private-input-staging.md)")
