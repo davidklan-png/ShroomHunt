@@ -1,0 +1,39 @@
+# Reviewed bilingual genus name table (plan §7 genus-search gate, TASK-008).
+# Maintained by David; these rows ARE the reviewed genus list. A listed genus is
+# searchable by its Latin name plus label_en/label_ja/aliases (matching is
+# case/diacritic-insensitive on the JS side) and ships with the leaf areas
+# where it passes the research gates in pipeline/build_mesh_research.py:
+# >=10 eligible genus-rank records across >=3 cells and >=3 independent
+# events per area. Masked genera are still dropped at build time — the
+# protection mask always wins over this table. Aliases are GENUS-level coarse
+# terms only, never species-specific strings: no binomials and no
+# protected-species names ("matsutake" is genus-level and fine;
+# "Tricholoma matsutake" is not). Where the established Japanese name was
+# unsure the row was left out entirely (curated > complete).
+genus,label_en,label_ja,aliases
+Tricholoma,knights,キシメジ属,matsutake|マツタケ
+Amanita,amanitas,テングタケ属,
+Russula,brittlegills,ベニタケ属,
+Boletus,boletes,イグチ属,porcini
+Cantharellus,chanterelles,アンズタケ,chanterelle
+Lactarius,milk caps,チチタケ属,
+Ramaria,coral fungi,ホウキタケ属,
+Lyophyllum,shimeji,シメジ,
+Pleurotus,oyster mushrooms,ヒラタケ,
+Lentinula,shiitake,シイタケ,
+Grifola,maitake,マイタケ,
+Hericium,lion's mane,ヤマブシタケ,
+Ganoderma,reishi,マンネンタケ,lingzhi
+Tuber,truffles,セイヨウショウロ,truffle
+Ophiocordyceps,caterpillar fungi,冬虫夏草,
+Morchella,morels,アミガサタケ,morel
+Flammulina,enoki,エノキタケ,エノキ
+Pholiota,nameko,ナメコ,
+Auricularia,wood ears,キクラゲ,
+Sparassis,cauliflower fungi,ハナビラタケ,
+Trametes,turkey tail,カワラタケ,
+Cortinarius,webcaps,フウセンタケ属,
+Armillaria,honey mushrooms,ナラタケ属,
+Tremella,snow fungus,シロキクラゲ属,
+Lycoperdon,puffballs,ホコリタケ属,
+Geastrum,earthstars,ツチグリ属,

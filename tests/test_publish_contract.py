@@ -39,7 +39,9 @@ ELIGIBLE_CELLS = {"313:1021", "317:1022", "322:1025"}
 
 RESEARCH = {"schema_version": 1, "snapshot": "",
             "slices": [[0, "all", [["313:1021", 1, None], ["322:1025", 2, 0]]]],
-            "genera": [["Prosus", ["okisle"]]]}
+            # TASK-008: the optional third element carries Name-search strings; both
+            # arities stay legal, anything else is an unknown shape.
+            "genera": [["Prosus", ["okisle"]], ["Russula", ["okisle"], ["brittlegills", "ベニタケ属"]]]}
 
 
 def tsv(path, header, rows):
@@ -201,6 +203,23 @@ class PublishContract(unittest.TestCase):
         with open(os.path.join(path, "dashboard.json")) as f:
             self.assertNotEqual(json.load(f)["snapshot"],
                                 bundle_digest(self.staging))  # optional data invalidates joins
+
+    def test_research_genera_names_must_be_strings(self):
+        # TASK-008: the optional third element is a list of strings and nothing else.
+        for mutate in (lambda row: row.__setitem__(2, "brittlegills"),   # not a list
+                       lambda row: row.__setitem__(2, ["ok", 7])):       # non-string member
+            research = json.loads(json.dumps(RESEARCH))
+            mutate(research["genera"][1])
+            def put(p, research=research):
+                write_json(os.path.join(p, "mesh-research.json"), research)
+            self.reject(put, "genera[1]", restamp=True)
+
+    def test_research_genera_rejects_unknown_arities(self):
+        research = json.loads(json.dumps(RESEARCH))
+        research["genera"][1].append("extra")                            # a fourth element
+        def put(p):
+            write_json(os.path.join(p, "mesh-research.json"), research)
+        self.reject(put, "genera[1]", restamp=True)
 
     # ---------- the reject matrix (one deliberate fault per variant) ---------------------------
 

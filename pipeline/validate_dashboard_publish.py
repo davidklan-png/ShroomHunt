@@ -340,9 +340,15 @@ def check_research(r, path, reasons, ids):
                 reasons.append(f"{keys}: slices[{i}].cells[{j}] is not "
                                f"[MeshKey, count_band, genus_share_band|null]")
     for i, row in enumerate(r["genera"]):
-        if not (isinstance(row, list) and len(row) == 2 and isinstance(row[0], str)
-                and isinstance(row[1], list) and all(a in ids for a in row[1])):
-            reasons.append(f"{keys}: genera[{i}] is not [reviewed_genus, areas] over index ids")
+        # TASK-008: an optional third element carries the common-name strings
+        # [label_en, label_ja, *aliases] for Name search — strings only, and
+        # every other arity stays rejected.
+        if not (isinstance(row, list) and len(row) in (2, 3) and isinstance(row[0], str)
+                and isinstance(row[1], list) and all(a in ids for a in row[1])
+                and (len(row) == 2 or (isinstance(row[2], list)
+                                       and all(isinstance(x, str) for x in row[2])))):
+            reasons.append(f"{keys}: genera[{i}] is not [reviewed_genus, areas] with an optional "
+                           f"string-names element, over index ids")
 
 
 # ---------- the scan pieces -------------------------------------------------------------------

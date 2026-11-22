@@ -36,17 +36,20 @@ Definitions this module owns (§7 gates the dashboard UI trusts):
   from that published file is omitted from that slice entirely (holding both
   files must not narrow either range), and a single-month 'all' omission
   cascades into month 0 as above.
-* Genus search list: only genera on the reviewed allowlist
-  (data/reference/genus_allowlist.csv, columns genus,note — David's review
-  populates it; the UNREVIEWED seed ships empty). Per genus: ≥10 eligible
-  genus-rank records across ≥3 cells; per listed leaf area (island/tile via
-  the islands.csv priority order, groups never) ≥3 independent events. An
-  absent or UNREVIEWED (empty) allowlist ships genera: [] with a stderr
-  warning while the slices still build.
+* Genus search list: only genera on the reviewed name table
+  (data/reference/taxon_names.csv, columns genus,label_en,label_ja,aliases —
+  David's review maintains it; the rows are the plan §7 genus-search gate).
+  Per genus: ≥10 eligible genus-rank records across ≥3 cells; per listed leaf
+  area (island/tile via the islands.csv priority order, groups never) ≥3
+  independent events. Each surviving row ships its names as the optional
+  third element [label_en, label_ja, *aliases] (empty ones dropped); masked
+  genera are dropped regardless of the table. An absent or header-only
+  (unreviewed) table ships genera: [] with a stderr warning while the slices
+  still build.
 
 Usage: python3 pipeline/build_mesh_research.py [--db data/shroomhunt.duckdb]
          [--out data/processed/mesh-research.json] [--previous mesh-research.json]
-         [--genera-allowlist data/reference/genus_allowlist.csv] ...
+         [--taxon-names data/reference/taxon_names.csv] ...
 Output is deterministic bytes (snapshot.write_json); snapshot stays empty
 until pipeline/snapshot.py stamps the bundle. Logs are aggregate counts only.
 """
@@ -89,7 +92,8 @@ ap.add_argument("--mask", default="data/reference/taxon_mask.csv")
 ap.add_argument("--coverage", default="data/reference/redlist_coverage.csv")
 ap.add_argument("--exceptions", default="data/reference/match_exceptions.csv")
 ap.add_argument("--islands", default="data/reference/islands.csv")
-ap.add_argument("--genera-allowlist", default="data/reference/genus_allowlist.csv")
+ap.add_argument("--taxon-names", default="data/reference/taxon_names.csv")
+ap.add_argument("--genera-allowlist", help="deprecated no-op: renamed --taxon-names (TASK-008)")
 ap.add_argument("--previous", help="previously published mesh-research.json (differencing guard)")
 a = ap.parse_args()
 
@@ -178,19 +182,31 @@ if withheld and (0, "all") in published:
     if not published[(0, "all")]: del published[(0, "all")]
 
 # ---------- reviewed genus search list -----------------------------------------------------------
-def read_allowlist(path):
+def read_taxon_names(path):
+    """(genus, [label_en, label_ja, *aliases]) rows; [] when absent or header-only."""
     try:
         with open(path, newline="", encoding="utf-8") as f:
             lines = [ln for ln in f if not ln.lstrip().startswith("#")]
     except FileNotFoundError:
         return []
-    return [(r.get("genus") or "").strip() for r in csv.DictReader(lines) if (r.get("genus") or "").strip()]
+    rows = []
+    for r in csv.DictReader(lines):
+        genus = (r.get("genus") or "").strip()
+        if not genus:
+            continue
+        names = [(r.get(k) or "").strip() for k in ("label_en", "label_ja")]
+        names += [al.strip() for al in (r.get("aliases") or "").split("|") if al.strip()]
+        rows.append((genus, [n for n in names if n]))
+    return rows
 
-allow = read_allowlist(a.genera_allowlist)
+if a.genera_allowlist:
+    print("mesh-research: --genera-allowlist is a deprecated no-op; the reviewed name table is "
+          "--taxon-names", file=sys.stderr)
+listed = read_taxon_names(a.taxon_names)
 genera, dropped_genera = [], {"support": 0, "masked": 0}
-if not allow:
-    print(f"mesh-research: genus search disabled — allowlist absent or UNREVIEWED ({a.genera_allowlist}); "
-          f"genera stays [] until David's review populates it", file=sys.stderr)
+if not listed:
+    print(f"mesh-research: genus search disabled — taxon name table absent or unreviewed "
+          f"({a.taxon_names}); genera stays [] until David's review populates it", file=sys.stderr)
 else:
     islands = list(csv.DictReader(open(a.islands, newline="", encoding="utf-8")))
     for i in islands:
@@ -202,7 +218,10 @@ else:
         for i in islands:
             if i["lat_min"] <= clat <= i["lat_max"] and i["lon_min"] <= clon <= i["lon_max"]: return i["id"]
         return tile_id(row, col)
-    for g in sorted(dict.fromkeys(allow)):
+    by_genus = {}
+    for g, names in listed:
+        by_genus.setdefault(g.lower(), (g, names))
+    for g, names in sorted(by_genus.values()):
         if gate.classify(genus=g, taxon_rank="GENUS"):
             dropped_genera["masked"] += 1
             continue
@@ -214,7 +233,7 @@ else:
         for cell, ev in hits:
             if ev: per_area[area_of(cell)].add(ev)
         areas = sorted(aid for aid, evs in per_area.items() if len(evs) >= GENUS_MIN_EVENTS)
-        if areas: genera.append([g, areas])
+        if areas: genera.append([g, areas, names])
         else: dropped_genera["support"] += 1
 
 # ---------- write ---------------------------------------------------------------------------------

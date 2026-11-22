@@ -7,13 +7,14 @@ cell short that must be withheld. The end-to-end test rebuilds the whole
 fixture bundle the way publish-dashboard.yml does (build_db -> builders ->
 research -> snapshot -> validate) with mesh-research.json in the digest.
 """
-import gzip, json, os, subprocess, sys, tempfile, unittest
+import csv, gzip, json, os, subprocess, sys, tempfile, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import duckdb
 
 from pipeline.snapshot import bundle_digest  # noqa: E402
+from pipeline.public_taxa import load_gate  # noqa: E402
 from test_public_taxa import FIX, write_coverage  # noqa: E402
 from test_public_taxa_outputs import MO_ROWS, NB_ROWS, run_builder  # noqa: E402
 from test_area_sanitization import ISLANDS_CSV  # noqa: E402
@@ -90,6 +91,7 @@ def fixture_rows():
     # genus-search fixtures: one genus per gate outcome (leaf area = okisle)
     for i, (lat, lon) in enumerate(GC):
         rows += [grec("AL", f"{i}-{j}", lat, lon, f"ev{j + 1}", "Allowus") for j in range(4)]   # ships
+        rows += [grec("GH", f"{i}-{j}", lat, lon, f"gv{j + 1}", "Ghostus") for j in range(4)]   # unlisted
     for i, (lat, lon) in enumerate(RC):
         rows += [grec("RA", f"{i}-{j}", lat, lon, f"ev{j}", "Rarus") for j in range(3)]         # 9 records
         rows += [grec("EV", f"{i}-{j}", lat, lon, "ev0", "Evencus") for j in range(4)]          # 1 event/area
@@ -97,13 +99,15 @@ def fixture_rows():
     rows += [grec("PA", str(j), 26.1, 127.8, f"ev{j}", "Paucius") for j in range(12)]           # 1 cell only
     return rows
 
-ALLOWLIST = """# reviewed fixture
-genus,note
-Allowus,fixture
-Paucius,fixture
-Rarus,fixture
-Evencus,fixture
-Matsutakus,fixture
+# the reviewed name table (TASK-008): labels and aliases ride along as the
+# optional third element; Ghostus is deliberately absent (unlisted genus).
+TAXON_NAMES = """# reviewed fixture
+genus,label_en,label_ja,aliases
+Allowus,allowus,アロウス,al|アロウス属
+Paucius,,
+Rarus,,
+Evencus,,
+Matsutakus,,
 """
 
 def slice_map(doc):
@@ -121,9 +125,9 @@ class MeshResearch(unittest.TestCase):
                     "--coverage", write_coverage(cls.tmp),
                     "--exceptions", os.path.join(FIX, "match_exceptions.csv"),
                     "--redlist", os.path.join(FIX, "redlist.json")]
-        cls.allow = os.path.join(cls.tmp, "genus_allowlist.csv")
-        with open(cls.allow, "w") as f:
-            f.write(ALLOWLIST)
+        cls.names = os.path.join(cls.tmp, "taxon_names.csv")
+        with open(cls.names, "w") as f:
+            f.write(TAXON_NAMES)
         cls.db = os.path.join(cls.tmp, "research.duckdb")
         c = duckdb.connect(cls.db)
         c.execute(f"create table jp({COLS})")
@@ -139,7 +143,7 @@ class MeshResearch(unittest.TestCase):
     def build(cls, *extra, out=None, db=None):
         path = out or os.path.join(cls.tmp, "mesh-research.json")
         r = run_builder("build_mesh_research.py", "--db", db or cls.db, "--out", path,
-                        "--islands", cls.islands, "--genera-allowlist", cls.allow,
+                        "--islands", cls.islands, "--taxon-names", cls.names,
                         *cls.refs, *extra)
         assert r.returncode == 0, r.stdout + r.stderr
         cls.last_run = r
@@ -200,7 +204,9 @@ class MeshResearch(unittest.TestCase):
                          {A, D, MU, V, PAUCIUS_CELL, *E_KEYS, *S_KEYS})
 
     def test_genera_gates_from_both_sides(self):
-        self.assertEqual(self.doc["genera"], [["Allowus", ["okisle"]]])
+        self.assertEqual(self.doc["genera"], [["Allowus", ["okisle"],
+                                               ["allowus", "アロウス", "al", "アロウス属"]]])
+        self.assertIn("genera dropped: {'support': 3, 'masked': 1}", self.last_run.stdout)
 
     def test_deterministic_bytes(self):
         with open(self.build(), "rb") as f:
@@ -222,16 +228,16 @@ class MeshResearch(unittest.TestCase):
         self.assertIn(T1, sm[(7, "all")])                      # unchanged band: still ships
         self.assertIn(A, sm[(3, "all")])
 
-    def test_absent_or_unreviewed_allowlist_ships_empty_genera_with_warning(self):
-        for name, text in (("absent", None), ("seed", "# UNREVIEWED SEED\ngenus,note\n")):
-            with self.subTest(allowlist=name):
-                allow = os.path.join(self.tmp, f"allow-{name}.csv")
+    def test_absent_or_unreviewed_name_table_ships_empty_genera_with_warning(self):
+        for name, text in (("absent", None), ("seed", "# UNREVIEWED SEED\ngenus,label_en,label_ja,aliases\n")):
+            with self.subTest(names=name):
+                table = os.path.join(self.tmp, f"names-{name}.csv")
                 if text is not None:
-                    with open(allow, "w") as f:
+                    with open(table, "w") as f:
                         f.write(text)
                 out = os.path.join(self.tmp, f"research-{name}.json")
                 r = run_builder("build_mesh_research.py", "--db", self.db, "--out", out,
-                                "--islands", self.islands, "--genera-allowlist", allow, *self.refs)
+                                "--islands", self.islands, "--taxon-names", table, *self.refs)
                 self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
                 self.assertIn("genus search disabled", r.stderr)
                 doc = json.load(open(out))
@@ -255,7 +261,7 @@ class OccurrenceIDDedupe(unittest.TestCase):
         out = os.path.join(tmp, "research.json")
         r = run_builder("build_mesh_research.py", "--db", db, "--out", out,
                         "--islands", os.path.join(FIX, "islands.csv"),
-                        "--genera-allowlist", os.path.join(tmp, "none.csv"),
+                        "--taxon-names", os.path.join(tmp, "none.csv"),
                         "--mask", os.path.join(FIX, "taxon_mask.csv"),
                         "--coverage", write_coverage(tmp),
                         "--exceptions", os.path.join(FIX, "match_exceptions.csv"),
@@ -268,7 +274,8 @@ class OccurrenceIDDedupe(unittest.TestCase):
 
 
 class ScaledBudget(unittest.TestCase):
-    """§8/§6 budget: a 2,763-cell universe at §1-like support rates stays <= 60 KiB gzip-9."""
+    """§8/§6 budget: a 2,763-cell universe at §1-like support rates stays <= 60 KiB
+    gzip-9 with the genus names element present (TASK-008)."""
 
     def test_gzip_budget_on_scaled_fixture(self):
         tmp = tempfile.mkdtemp()
@@ -301,10 +308,13 @@ class ScaledBudget(unittest.TestCase):
         c.execute(f"create table jp as select * from read_csv('{tsv}', delim='\\t', header=true, "
                   f"quote='', all_varchar=true)")
         c.close()
+        names = os.path.join(tmp, "taxon_names.csv")           # TASK-008: names present in the payload
+        with open(names, "w") as f:
+            f.write("genus,label_en,label_ja,aliases\nProsus,prosus,プロスス,pro\n")
         out = os.path.join(tmp, "mesh-research.json")
         r = run_builder("build_mesh_research.py", "--db", db, "--out", out,
                         "--islands", os.path.join(FIX, "islands.csv"),
-                        "--genera-allowlist", os.path.join(tmp, "none.csv"),
+                        "--taxon-names", names,
                         "--mask", os.path.join(FIX, "taxon_mask.csv"),
                         "--coverage", write_coverage(tmp),
                         "--exceptions", os.path.join(FIX, "match_exceptions.csv"),
@@ -317,8 +327,53 @@ class ScaledBudget(unittest.TestCase):
         month0 = next(s for s in doc["slices"] if s[0] == 0 and s[1] == "all")
         self.assertEqual(len(month0[2]), 2763)                 # no withheld month anywhere: nothing suppressed
         self.assertGreater(entries, 9000)                      # the fixture genuinely stresses the budget
+        self.assertEqual(len(doc["genera"]), 1)                # the listed genus ships with its names
+        genus, areas, namelist = doc["genera"][0]
+        self.assertEqual((genus, namelist), ("Prosus", ["prosus", "プロスス", "pro"]))
+        self.assertTrue(areas)
         gz = len(gzip.compress(raw, 9))
         self.assertLessEqual(gz, 60 * KIB, f"{gz:,} gzip-9 bytes over {entries:,} cell entries")
+
+
+class SeededTaxonNames(unittest.TestCase):
+    """TASK-008: data/reference/taxon_names.csv — David's reviewed bilingual name
+    table. Every name that can enter the payload must be a genus-level coarse
+    term: aliases single-token (a binomial always carries a space), no
+    binomial-shaped label, and nothing the real protected-taxon gate masks."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(REPO, "data", "reference", "taxon_names.csv"),
+                  newline="", encoding="utf-8") as f:
+            cls.rows = list(csv.DictReader(ln for ln in f if not ln.lstrip().startswith("#")))
+        cls.gate = load_gate(mask=os.path.join(REPO, "data", "reference", "taxon_mask.csv"),
+                             coverage=os.path.join(REPO, "data", "reference", "redlist_coverage.csv"),
+                             exceptions=os.path.join(REPO, "data", "reference", "match_exceptions.csv"),
+                             redlist=os.path.join(REPO, "data", "raw", "redlist", "redlist_fungi_jp.json"))
+
+    @staticmethod
+    def names_of(row):
+        aliases = [a.strip() for a in (row.get("aliases") or "").split("|") if a.strip()]
+        return [(row.get(k) or "").strip() for k in ("label_en", "label_ja")], aliases
+
+    def test_table_parses_with_unique_latin_genera(self):
+        self.assertGreater(len(self.rows), 20)                  # a real curated list, not a stub
+        genera = [(r.get("genus") or "").strip() for r in self.rows]
+        for g in genera:
+            self.assertRegex(g, r"^[A-Z][a-z]+$", g)
+        self.assertEqual(len({g.lower() for g in genera}), len(genera))   # no duplicate genus
+
+    def test_names_are_genus_level_and_never_protected(self):
+        for row in self.rows:
+            labels, aliases = self.names_of(row)
+            for alias in aliases:                               # a binomial always has a space
+                self.assertNotRegex(alias, r"\s", alias)
+            for name in [*labels, *aliases]:
+                self.assertNotRegex(name, r"^[A-Z][a-z]+ [a-z]+$", name)  # Linnaean shape
+                self.assertFalse(self.gate.classify(species=name, taxon_rank="SPECIES"),
+                                 f"{name!r} is a protected name and must not ship")
+            for alias in aliases:                               # never alias a masked genus word
+                self.assertFalse(self.gate.classify(genus=alias, taxon_rank="GENUS"), alias)
 
 
 class EndToEndBundle(unittest.TestCase):
@@ -342,10 +397,16 @@ class EndToEndBundle(unittest.TestCase):
                      "locality", "stateProvince", "datasetKey", "coordinateUncertaintyInMeters",
                      "coordinatePrecision", "issue", "eventID", "recordedBy"]
         # rec() field order -> the jp TSV column order (occurrenceID dropped, events appended)
-        jp_rows = [tuple(r[i] for i in (0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
-                                        19, 20, 21, 17, 18))
+        to_tsv = (0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 17, 18)
+        jp_rows = [tuple(r[i] for i in to_tsv)
                    for r in (rec(f"R{i}", 26.1, 127.7, 3 if i < 12 else 5, f"e{i % 4 + 1}")
                              for i in range(16))]
+        # TASK-008: 12 genus-rank Russula records over 3 okisle cells / 12 events in month 6
+        # (below cell support, so no slice changes) — the repo's seeded real name table
+        # ships the genus with its bilingual names through the whole publish path.
+        jp_rows += [tuple(rec(f"GR{i}", 26.1 + i % 3 * 0.1, 127.7, 6, f"ge{i}",
+                              rank="GENUS", genus="Russula")[i_2] for i_2 in to_tsv)
+                    for i in range(12)]
         tsv("jp.tsv", jp_header, jp_rows)
         tsv("nb.tsv", ["species", "phylum", "order", "family", "genus", "class", "numberOfOccurrences",
                        "iucnRedListCategory", "taxonRank", "taxonomicStatus", "speciesKey"], NB_ROWS)
@@ -354,7 +415,7 @@ class EndToEndBundle(unittest.TestCase):
                          "dataGeneralizations", "informationWithheld"], [])
         meta = os.path.join(raw, "meta.json")
         with open(meta, "w") as f:
-            json.dump({"key": "dx", "doi": "10.9999/fake-doi", "totalRecords": 16,
+            json.dump({"key": "dx", "doi": "10.9999/fake-doi", "totalRecords": 28,
                        "created": "2026-11-21T00:00:00Z"}, f)
         cls.islands = os.path.join(cls.tmp, "islands.csv")
         with open(cls.islands, "w") as f:
@@ -393,7 +454,10 @@ class EndToEndBundle(unittest.TestCase):
         self.assertEqual(self.research["snapshot"], digest)    # and the digest covers it
         sm = slice_map(self.research)
         self.assertEqual(sm[(3, "all")], {A: (0, None)})       # 12 records / 4 events: a real shipped slice
-        self.assertEqual(self.research["genera"], [])          # repo allowlist seed is UNREVIEWED
+        # the repo's seeded real name table (data/reference/taxon_names.csv) ships Russula
+        # with its reviewed bilingual names; only listed genera can appear, mask winning
+        self.assertEqual(self.research["genera"],
+                         [["Russula", ["okisle"], ["brittlegills", "ベニタケ属"]]])
 
     def test_workflow_runs_research_before_the_stamp_outside_geography_only(self):
         with open(os.path.join(REPO, ".github", "workflows", "publish-dashboard.yml")) as f:
