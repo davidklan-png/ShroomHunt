@@ -6,6 +6,15 @@ Public-safety rules (decision D6):
   * Red List and commercially collected species are left out of the map entirely and are only
     reported as totals. They can still appear by name in species lists, never with a location.
 
+Cross-dataset dedup (TASK-016): one physical specimen published by two datasets — same
+normalised (institutionCode, catalogNumber), pipeline/shared.py specimen_key as in the
+other builders (TASK-014) — counts once, the first record in gbifID order winning; an
+empty catalogNumber identifies nothing, so those rows each count. This module aggregates
+jp in SQL rather than a gated Python row pass, so the dedup lands at the base relation:
+a temp copy of jp that every later query — the neighbour SQL's jp reads included —
+resolves to instead of the raw table; a jp without those columns or gbifID (test
+fixtures) keeps every record.
+
 Usage: python3 pipeline/build_dashboard_data.py --out dashboard.json \
          --meta data/raw/gbif/*.json --redlist data/raw/redlist/redlist_fungi_jp.json
 Needs: pip install duckdb. Run pipeline/build_db.py and analysis/01_neighbour_candidates.sql first."""
@@ -17,6 +26,7 @@ from geo_ja import cell_center, mesh_cell  # noqa: E402
 from public_taxa import load_gate  # noqa: E402
 from eligibility import precision_selection, spatially_eligible  # noqa: E402
 from snapshot import write_json  # noqa: E402
+from shared import specimen_key  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--db", default="data/shroomhunt.duckdb")
@@ -32,6 +42,32 @@ c = duckdb.connect(a.db)
 # Shared protected-taxon gate (TASK-002): install before the neighbour SQL, which uses its tables.
 gate = load_gate(mask=a.mask, coverage=a.coverage, exceptions=a.exceptions, redlist=a.redlist)
 gate.install_sql(c)
+
+# TASK-016: cross-dataset specimen dedup (specimen_key, TASK-014). This module counts raw
+# jp in SQL aggregates — before/outside the taxon gate, unlike build_areas.py's gated
+# Python row pass — so the dedup lands at the base relation: a temp copy of jp keeping
+# each specimen pair's first record in gbifID order, shadowing jp for every later query
+# (the neighbour SQL's reads included). Header-guarded like the other builders; a jp
+# without gbifID cannot name the rows to drop, so it skips dedup too.
+jp_cols = {r[0] for r in c.execute(
+    "select column_name from information_schema.columns where table_name='jp'").fetchall()}
+xdupes, seen, drop = 0, set(), []
+if {"gbifID", "institutionCode", "catalogNumber"} <= jp_cols:
+    for gid, inst, cat in c.execute(
+            "select gbifID, institutionCode, catalogNumber from jp order by gbifID nulls last").fetchall():
+        pair = specimen_key(inst, cat)
+        if pair is None: continue                   # empty catalogNumber identifies nothing
+        if pair in seen:
+            if gid is not None: drop.append((gid,))
+        else:
+            seen.add(pair)
+    if drop:
+        xdupes = len(drop)
+        c.execute("create temp table xdrop as select gbifID from jp limit 0")
+        c.executemany("insert into xdrop values (?)", drop)
+        c.execute("create temp table jp as select * from main.jp "
+                  "where gbifID is null or gbifID not in (select gbifID from xdrop)")
+
 c.execute(open("analysis/01_neighbour_candidates.sql").read())
 
 one = lambda q: c.execute(q).fetchone()
@@ -100,4 +136,4 @@ write_json(a.out, out)
 print(f"wrote {a.out}: {len(mesh)} mesh cells, {len(leads)} leads, "
       f"{totals['sensitive_records']} records masked/quarantined "
       f"({one('select count(*) from jp where speciesKey::varchar in (select k from sens)')[0]} by Red List key), "
-      f"{totals['sensitive_species']} masked species")
+      f"{totals['sensitive_species']} masked species, cross-dataset duplicates removed: {xdupes}")
