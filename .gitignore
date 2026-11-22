@@ -6,3 +6,4 @@ __pycache__/
 # Cross-session task handoff (coordination, not product)
 handoff/
 .venv/
+data/shroomhunt.duckdb
