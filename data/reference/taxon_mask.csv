@@ -1,13 +1,17 @@
 # REVIEWED — approved by David Klan, 2026-11-22 (plan §7 sign-off).
-# Note: aliases intentionally empty; GBIF occurrences carry the accepted speciesKey,
-# so synonym records are masked by key via the Red List match.
+# Aliases are the names under which the same fungus is separately recorded.
+# Key masking covers Red List keys only — never the commercial rows, which
+# match by name string — so a separately accepted speciesKey needs its own
+# alias here (Ganoderma sichuanense is accepted apart from G. lucidum).
+# Old combinations (Tricholoma nauseosum, Cordyceps sinensis) are belt-and-
+# braces: GBIF usually reinterprets them to the accepted name, which masks.
 # aliases: pipe-separated synonyms/old combinations that also mask.
 scientific_name,aliases,reason
-Tricholoma matsutake,,Commercially poached; matsutake grounds are leased
+Tricholoma matsutake,Tricholoma nauseosum|Armillaria matsutake,Commercially poached; matsutake grounds are leased
 Tricholoma bakamatsutake,,Commercially collected with matsutake
 Tuber himalayense,,Truffle: commercially collected
 Tuber japonicum,,Truffle: commercially collected
 Tuber longispinosum,,Truffle: commercially collected
-Ophiocordyceps sinensis,,High-value collecting
-Ganoderma lucidum,,Commercially collected
+Ophiocordyceps sinensis,Cordyceps sinensis,High-value collecting
+Ganoderma lucidum,Ganoderma lingzhi|Ganoderma sichuanense,Commercially collected
 Grifola frondosa,,Commercially collected

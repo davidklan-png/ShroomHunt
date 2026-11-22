@@ -4,14 +4,13 @@
 # case/diacritic-insensitive on the JS side) and ships with the leaf areas
 # where it passes the research gates in pipeline/build_mesh_research.py:
 # >=10 eligible genus-rank records across >=3 cells and >=3 independent
-# events per area. Masked genera are still dropped at build time — the
-# protection mask always wins over this table. Aliases are GENUS-level coarse
-# terms only, never species-specific strings: no binomials and no
-# protected-species names ("matsutake" is genus-level and fine;
-# "Tricholoma matsutake" is not). Where the established Japanese name was
-# unsure the row was left out entirely (curated > complete).
+# events per area. Labels and aliases are genus-level terms only, never a
+# species common name (David, 2026-11-22): no binomials, and nothing that
+# names one protected species — "matsutake" or "reishi" would surface the
+# very areas the species-level mask hides. Where the established Japanese
+# name was unsure the row was left out entirely (curated > complete).
 genus,label_en,label_ja,aliases
-Tricholoma,knights,キシメジ属,matsutake|マツタケ
+Tricholoma,knights,キシメジ属,
 Amanita,amanitas,テングタケ属,
 Russula,brittlegills,ベニタケ属,
 Boletus,boletes,イグチ属,porcini
@@ -21,9 +20,9 @@ Ramaria,coral fungi,ホウキタケ属,
 Lyophyllum,shimeji,シメジ,
 Pleurotus,oyster mushrooms,ヒラタケ,
 Lentinula,shiitake,シイタケ,
-Grifola,maitake,マイタケ,
+Grifola,grifola,マイタケ属,
 Hericium,lion's mane,ヤマブシタケ,
-Ganoderma,reishi,マンネンタケ,lingzhi
+Ganoderma,ganoderma,マンネンタケ属,
 Tuber,truffles,セイヨウショウロ,truffle
 Ophiocordyceps,caterpillar fungi,冬虫夏草,
 Morchella,morels,アミガサタケ,morel

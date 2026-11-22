@@ -45,6 +45,14 @@ class GateBehaviour(unittest.TestCase):
         for name in ("Matsutakus fictus", "Tricholoma fictum", "Armillaria ficta"):
             self.assertEqual(self.gate.classify(species=name), "name")
 
+    def test_alias_named_records_mask_exact_and_infraspecific(self):
+        # TASK-010: a record named by a mask alias masks, exact and as an
+        # infraspecific prefix ("<alias> var. x") — the real mask now carries
+        # aliases (Ganoderma sichuanense, Tricholoma nauseosum).
+        for name in ("Oldus apocryphus", "Oldus apocryphus var. x",
+                     "Falsus apocryphus", "Falsus apocryphus f. alba"):
+            self.assertEqual(self.gate.classify(species=name), "name")
+
     def test_key_match_with_unrelated_verbatim_name(self):
         for key in (9001, "9001"):
             self.assertEqual(self.gate.classify(species="Innocens alia", species_key=key), "key")

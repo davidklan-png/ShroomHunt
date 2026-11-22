@@ -427,6 +427,27 @@ class SeededTaxonNames(unittest.TestCase):
             for alias in aliases:                               # never alias a masked genus word
                 self.assertFalse(self.gate.classify(genus=alias, taxon_rank="GENUS"), alias)
 
+    def test_task010_approved_rows(self):
+        # David-approved rows, 2026-11-22: labels are genus-level words, aliases
+        # cleared — "matsutake"/"reishi"/"maitake" must not label a genus.
+        by_genus = {r["genus"]: r for r in self.rows}
+        expected = {"Tricholoma": (["knights", "キシメジ属"], []),
+                    "Grifola": (["grifola", "マイタケ属"], []),
+                    "Ganoderma": (["ganoderma", "マンネンタケ属"], [])}
+        for genus, want in expected.items():
+            self.assertEqual(self.names_of(by_genus[genus]), want, genus)
+
+    def test_no_species_common_name_labels_a_genus(self):
+        # TASK-010 regression: none of these species common names may appear as
+        # any genus's label or alias — exact token, so genus labels carrying the
+        # 属 suffix (マイタケ属) still pass while マイタケ alone would not.
+        banned = {"matsutake", "マツタケ", "reishi", "lingzhi",
+                  "マンネンタケ", "maitake", "マイタケ"}
+        for row in self.rows:
+            labels, aliases = self.names_of(row)
+            for name in [*labels, *aliases]:
+                self.assertNotIn(name.strip().lower(), banned, row["genus"])
+
 
 class EndToEndBundle(unittest.TestCase):
     """The full fixture bundle, built exactly the way publish-dashboard.yml builds it,
