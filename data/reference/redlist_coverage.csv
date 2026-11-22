@@ -1,5 +1,6 @@
-# UNREVIEWED SEED — no coverage row yet, so publishing stays blocked (fail closed).
-# After a fresh Red List download, append a row and have it reviewed:
-#   python3 pipeline/public_taxa.py data/raw/redlist/redlist_fungi_jp.json >> data/reference/redlist_coverage.csv
-# The gate checks sha256/names/matched/ambiguous against the actual download.
+# Red List coverage: one row per reviewed download (content digest — the file's
+# "fetched" date is excluded so re-downloads still match). Append after each
+# fresh download with: python3 pipeline/public_taxa.py data/raw/redlist/redlist_fungi_jp.json >> data/reference/redlist_coverage.csv
+# Approved by David Klan, 2026-11-22 (taxon review sign-off, plan §7).
 sha256,names,matched,ambiguous
+571d81ace15973ab68883960779eeccb07cebeaff51367c75e19460ad0ba6348,159,154,5

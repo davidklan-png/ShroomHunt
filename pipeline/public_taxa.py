@@ -55,10 +55,15 @@ def redlist_facts(path):
             raw = f.read()
     except FileNotFoundError:
         raise PublicTaxaError(f"Red List download missing: {path}")
-    species = json.loads(raw)["species"]
+    d = json.loads(raw)
+    species = d["species"]
     matched = sum(1 for s in species if s.get("speciesKey"))
     ambiguous = sum(1 for s in species if s.get("speciesKey") and s.get("matchType") not in (None, "EXACT"))
-    return hashlib.sha256(raw).hexdigest(), len(species), matched, ambiguous, species
+    # Digest covers stable content only: the file's "fetched" date changes on every
+    # re-download, so hashing raw bytes would break the coverage row across runs.
+    canon = json.dumps({"dataset": d.get("dataset"), "doi": d.get("doi"), "species": species},
+                       sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()
+    return hashlib.sha256(canon).hexdigest(), len(species), matched, ambiguous, species
 
 
 class Gate:
