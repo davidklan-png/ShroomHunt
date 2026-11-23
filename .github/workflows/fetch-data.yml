@@ -55,7 +55,10 @@ jobs:
           else python3 pipeline/gbif_request.py $WHICH; fi
 
       - name: Japan fungal Red List
-        run: python3 pipeline/fetch_redlist.py
+        run: |
+          command -v pdftotext >/dev/null 2>&1 || sudo apt-get install -y poppler-utils
+          python3 pipeline/fetch_redlist.py          # 2020 download: provenance + union fallback input
+          python3 pipeline/fetch_redlist_2025.py     # 2025 PDF: the masking input (TASK-020, D12)
 
       - name: Mushroom Observer
         if: ${{ inputs.mushroomobserver }}
