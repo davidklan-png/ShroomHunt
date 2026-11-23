@@ -29,8 +29,8 @@ class ParseSparql(unittest.TestCase):
         self.assertEqual(rows["1001"]["qid"], "Q42")
         self.assertEqual(rows["1001"]["jawp"], "Tricholoma_属")
         self.assertEqual(rows["1001"]["enwp"], "Tricholoma_fictum")
-        self.assertEqual(rows["1001"]["p18"], "Tricholoma fictum.jpg")
-        self.assertIsNone(rows["1002"]["p18"])
+        self.assertEqual(rows["1001"]["p18"], ["Tricholoma fictum.jpg"])
+        self.assertEqual(rows["1002"]["p18"], [])
         self.assertNotIn("1003", rows)
 
     def test_duplicate_keys_merge_first_values(self):
@@ -39,7 +39,7 @@ class ParseSparql(unittest.TestCase):
                         p18="http://commons.wikimedia.org/wiki/Special:FilePath/A.jpg")])
         rows = wd.parse_sparql(doc)
         self.assertEqual(rows["1001"]["qid"], "Q1")      # first binding wins
-        self.assertEqual(rows["1001"]["p18"], "A.jpg")   # absent fields fill in
+        self.assertEqual(rows["1001"]["p18"], ["A.jpg"])   # absent fields fill in
 
 
 class Licence(unittest.TestCase):

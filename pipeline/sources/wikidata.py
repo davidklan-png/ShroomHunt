@@ -47,15 +47,17 @@ def parse_sparql(doc):
         key = g("key")
         if key is None:
             continue
-        row = out.setdefault(key, {"qid": None, "jawp": None, "enwp": None, "p18": None})
+        row = out.setdefault(key, {"qid": None, "jawp": None, "enwp": None, "p18": []})
         if row["qid"] is None and g("item"):
             row["qid"] = g("item").rsplit("/", 1)[-1]
         for f in ("jawp", "enwp"):
             if row[f] is None and g(f):
                 row[f] = urllib.parse.unquote(g(f))
-        if row["p18"] is None and g("p18"):
+        if g("p18"):
             tail = g("p18").rsplit("/", 1)[-1]
-            row["p18"] = urllib.parse.unquote(tail) if "." in tail else None
+            name = urllib.parse.unquote(tail) if "." in tail else None
+            if name and name not in row["p18"]:        # PR #6 review: keep every P18 candidate
+                row["p18"].append(name)
     return out
 
 
@@ -120,7 +122,7 @@ def main(argv=None):
         if a.sleep and i * a.chunk < len(keys):
             time.sleep(a.sleep)
 
-    titles = sorted({v["p18"] for v in by_key.values() if v["p18"]})
+    titles = sorted({p for v in by_key.values() for p in v["p18"]})
     print(f"P18 image titles: {len(titles)} -> imageinfo batches of 50")
     licences = {}
     for i, batch in enumerate(chunked(titles, 50), 1):
@@ -136,8 +138,17 @@ def main(argv=None):
         """The species' best Wikidata facts across all its legacy keys."""
         hits = [by_key[k] for k in species_row["legacy_keys"] if k in by_key]
         first = lambda f: next((h[f] for h in hits if h[f]), None)
-        p18 = first("p18")
-        lic = licences.get(f"File:{p18}") if p18 else None
+        # PR #6 review: try every P18 candidate; the first licence-acceptable one wins,
+        # else report the first candidate with its (unusable) licence for the stats
+        cands = [p for h in hits for p in h["p18"]]
+        p18, lic = None, None
+        for c in cands:
+            l = licences.get(f"File:{c}")
+            if l in ACCEPTABLE:
+                p18, lic = c, l
+                break
+        if p18 is None and cands:
+            p18, lic = cands[0], licences.get(f"File:{cands[0]}")
         return {"item": bool(hits), "qid": first("qid"), "jawp": first("jawp"),
                 "enwp": first("enwp"), "p18": p18, "licence": lic}
 

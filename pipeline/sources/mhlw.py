@@ -150,7 +150,10 @@ def main(argv=None):
     import duckdb
     con = duckdb.connect(a.db)
     try:
-        if not con.execute("select count(*) from colmap").fetchone()[0]:
+        has_colmap = con.execute(
+            "select count(*) from information_schema.tables where table_name = 'colmap'"
+        ).fetchone()[0]
+        if not has_colmap or not con.execute("select count(*) from colmap").fetchone()[0]:
             from pipeline.col_xr import load_map
             load_map(con, a.map)
         public = common.public_species(a.db)

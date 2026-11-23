@@ -94,7 +94,8 @@ def fetch(url, cache=None, params=None, headers=None, ua=UA, data=None, retries=
             err = e
         except (urllib.error.URLError, OSError) as e:
             err = e
-        print(f"  attempt {attempt}/{retries} failed: {e}", file=sys.stderr)
+        # PR #6 review: `as e` is cleared when the except suite exits — log the retained err
+        print(f"  attempt {attempt}/{retries} failed: {err}", file=sys.stderr)
         time.sleep(BACKOFF * attempt)
     raise err
 
