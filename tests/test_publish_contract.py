@@ -222,6 +222,26 @@ class PublishContract(unittest.TestCase):
             write_json(os.path.join(p, "mesh-research.json"), research)
         self.reject(put, "genera[1]", restamp=True)
 
+    def test_id_depth_rejects_duplicate_or_missing_buckets(self):
+        # PR #5 review: [species, species, genus] with a correct sum must not publish
+        def put(d):
+            s, g, h = (n for _, n in d["id_depth"])
+            d["id_depth"] = [["species", s], ["species", 0], ["genus", g + h]]
+        self.reject(lambda p: self.edit(p, "areas/okisle.json", put),
+                    "species/genus/higher triple", restamp=True)
+
+    def test_group_aggregates_reject_when_they_contradict_their_members(self):
+        # PR #5 review: moving counts between bases keeps every total but contradicts
+        # the leaf areas — the inspector would show a chart no island supports
+        def put(d):
+            ev = {k: n for k, n in d["evidence"]}
+            for k in list(ev):
+                if k != "HUMAN_OBSERVATION":
+                    ev["HUMAN_OBSERVATION"] = ev.get("HUMAN_OBSERVATION", 0) + ev.pop(k)
+            d["evidence"] = sorted(ev.items(), key=lambda kv: -kv[1])
+        self.reject(lambda p: self.edit(p, "areas/g-okinawa-prefecture.json", put),
+                    "disagrees with the sum of its members", restamp=True)
+
     # ---------- the reject matrix (one deliberate fault per variant) ---------------------------
 
     def test_unknown_schema_version_rejects(self):

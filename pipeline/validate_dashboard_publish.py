@@ -274,6 +274,10 @@ def check_area_file(f, path, reasons, ids):
         for i, row in enumerate(f["id_depth"]):
             if not (isinstance(row, list) and len(row) == 2 and row[0] in RANKS and is_uint(row[1])):
                 reasons.append(f"{keys}: id_depth[{i}] is not a [rank, UInt] pair over {sorted(RANKS)}")
+        # PR #5 review: exactly the species/genus/higher triple, in order — duplicate or
+        # missing buckets that still sum right must not publish
+        if len(reasons) == n0 and [r[0] for r in f["id_depth"]] != ["species", "genus", "higher"]:
+            reasons.append(f"{keys}: id_depth must be exactly the species/genus/higher triple, in order")
         for i, row in enumerate(f["decades"]):
             if not (isinstance(row, list) and len(row) == 2 and is_uint(row[0]) and is_uint(row[1])):
                 reasons.append(f"{keys}: decades[{i}] is not a [decade, UInt] pair")
@@ -544,6 +548,24 @@ def _occurrence(files, docs, staging, gate_args, reasons):
     if carrying and len(carrying) != len(detail):
         reasons.append(f"integrity: TASK-021 aggregates on {len(carrying)} of {len(detail)} area files — "
                        f"all or none (missing from {sorted(set(detail) - set(carrying))[:3]})")
+    # PR #5 review: a group's aggregates are defined as the sum of its members' published
+    # arrays — restamped counts that contradict the leaf areas must not publish
+    for r in carrying:
+        d = docs[r]
+        members = d.get("members") if isinstance(d, dict) else None
+        if not isinstance(members, list) or not members:
+            continue
+        mdocs = [docs.get(f"areas/{m}.json") for m in members]
+        if not all(isinstance(md, dict) and AGG_KEYS <= set(md) for md in mdocs):
+            continue        # a member without the trio fails the uniformity check above
+        for field in ("evidence", "id_depth", "decades"):
+            merged = {}
+            for md in mdocs:
+                for row in md[field]:
+                    if isinstance(row, list) and len(row) == 2 and isinstance(row[1], int):
+                        merged[row[0]] = merged.get(row[0], 0) + row[1]   # malformed rows already
+            if dict(d[field]) != merged:                                  # rejected by the shape check
+                reasons.append(f"integrity: {r}: {field} disagrees with the sum of its members' arrays")
     if len(stamps) > 1:
         reasons.append("digest mismatch: occurrence files carry more than one snapshot value")
 
