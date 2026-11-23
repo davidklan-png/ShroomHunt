@@ -219,13 +219,21 @@ class EmitMaskMap(unittest.TestCase):
     def tearDown(self):
         self.con.close()
 
-    def emit(self, drop=()):
+    def emit(self, drop=(), overrides=None):
         tsv = write_tsv_gz(os.path.join(self.tmp, "col.tsv.gz"), XWALK, drop=drop)
         col_xr.load_map(self.con, tsv)
         out = os.path.join(self.tmp, "col_mask_map.csv")
-        col_xr.emit_mask_map(self.con, self.gate, out)
+        col_xr.emit_mask_map(self.con, self.gate, out, overrides=overrides)
         with open(out, newline="") as f:
             return list(csv.DictReader(ln for ln in f if not ln.startswith("#")))
+
+    def overrides(self, rows):
+        path = os.path.join(self.tmp, "col_mask_overrides.csv")
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f, lineterminator="\n")
+            w.writerow(["kind", "value", "col_key", "method", "reason"])
+            w.writerows(rows)
+        return path
 
     def test_emits_every_gate_key_and_name(self):
         rows = {(r["source"], r["value"]): (r["col_key"], r["col_accepted_name"]) for r in self.emit()}
@@ -239,6 +247,58 @@ class EmitMaskMap(unittest.TestCase):
         for drop, what in ((("9001",), "key 9001"), (("7003",), "armillaria ficta")):
             with self.assertRaisesRegex(PublicTaxaError, what):
                 self.emit(drop=drop)
+
+    def test_override_with_col_key_joins_the_map(self):
+        # 7002 dropped: "tricholoma fictum" misses, but its CRL3 accepted taxon stays
+        # reachable via 7001, so the map row carries the accepted name; CRLX1/CRLX2
+        # are in no crosswalk row, so those overrides map with an empty accepted name.
+        # Dropping 9001 orphans the key AND the name "rareus japonicus".
+        ov = self.overrides([("name", "tricholoma fictum", "CRL3", "api-name", "matched by name"),
+                             ("key", "9001", "CRLX1", "api-key", "matched by usage key"),
+                             ("name", "rareus japonicus", "CRLX2", "api-name", "matched by name")])
+        rows = {(r["source"], r["value"]): (r["col_key"], r["col_accepted_name"])
+                for r in self.emit(drop=("7002", "9001"), overrides=ov)}
+        self.assertEqual(rows[("name", "tricholoma fictum")], ("CRL3", "Matsutakus fictus"))
+        self.assertEqual(rows[("key", "9001")], ("CRLX1", ""))
+        self.assertEqual(rows[("name", "rareus japonicus")], ("CRLX2", ""))
+
+    def test_override_with_empty_col_key_passes_without_adding_a_key(self):
+        ov = self.overrides([("name", "armillaria ficta", "", "manual", "COL lacks the taxon")])
+        rows = {(r["source"], r["value"]): (r["col_key"], r["col_accepted_name"])
+                for r in self.emit(drop=("7003",), overrides=ov)}
+        self.assertEqual(rows[("name", "armillaria ficta")], ("", ""))   # reviewed legacy-masked
+
+    def test_unmatched_entry_with_no_override_row_still_raises(self):
+        ov = self.overrides([("name", "neminem novi", "CRL5", "manual", "unrelated row")])
+        for bad in (None, ov):
+            with self.assertRaisesRegex(PublicTaxaError, "key 9001"):
+                self.emit(drop=("9001",), overrides=bad)
+        with self.assertRaisesRegex(PublicTaxaError, "col_mask_overrides missing"):
+            self.emit(drop=("9001",), overrides=os.path.join(self.tmp, "missing.csv"))
+
+    def test_stale_override_row_raises(self):
+        # Checked only when overrides are consumed at all: every real miss is
+        # covered, but a row nothing asked for must not survive a review silently.
+        ov = self.overrides([("name", "armillaria ficta", "", "manual", "COL lacks the taxon"),
+                             ("key", "9001", "CRLX1", "api-key", "crosswalk resolves it now")])
+        with self.assertRaisesRegex(PublicTaxaError, "no longer needed"):
+            self.emit(drop=("7003",), overrides=ov)
+
+    def test_malformed_override_rows_raise(self):
+        for rows, what in (([("phylum", "9001", "CRLX1", "api-key", "")], "kind 'phylum'"),
+                           ([("key", "9001", "CRLX1", "guess", "")], "method 'guess'"),
+                           ([("key", "9001", "CRLX1", "api-key", ""), ("key", "9001", "", "manual", "")],
+                            "duplicate")):
+            with self.assertRaisesRegex(PublicTaxaError, what):
+                self.emit(drop=("9001",), overrides=self.overrides(rows))
+
+    def test_fixture_overrides_file_shape(self):
+        rows = {(r["source"], r["value"]): (r["col_key"], r["col_accepted_name"])
+                for r in self.emit(drop=("9001", "7003"),
+                                   overrides=os.path.join(FIX, "col_mask_overrides.csv"))}
+        self.assertEqual(rows[("key", "9001")], ("CRLX1", ""))
+        self.assertEqual(rows[("name", "rareus japonicus")], ("CRLX2", ""))
+        self.assertEqual(rows[("name", "armillaria ficta")], ("", ""))
 
 
 if __name__ == "__main__":

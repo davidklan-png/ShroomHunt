@@ -21,18 +21,22 @@ list once — and sp_name = coalesce(col_name, species).
 Fail closed: emit_mask_map raises PublicTaxaError when a keyed Red List entry,
 a commercial mask row or an alias resolves to no COL accepted taxon; the gate
 (public_taxa.load_gate(col_mask=...)) then refuses to load until the mask map
-is regenerated and reviewed.
+is regenerated and reviewed. An entry unmatched by the crosswalk passes on its
+reviewed overrides row instead (data/reference/col_mask_overrides.csv, resolved
+against the live GBIF matching service by pipeline/col_resolve_gaps.py,
+TASK-019); an empty col_key there means it stays legacy-masked.
 
 Usage: python3 pipeline/col_xr.py --db data/shroomhunt.duckdb --map data/raw/col/gbif-col265.tsv.gz
          [--mask-map data/reference/col_mask_map.csv] [--diff data/raw/col/col_xr_diff.md]
+         [--overrides data/reference/col_mask_overrides.csv]
          [--mask ... --coverage ... --exceptions ... --redlist ...]        (gate inputs)
 """
 import argparse, csv, gzip, os, sys
 
 try:
-    from .public_taxa import PublicTaxaError, load_gate   # imported as pipeline.col_xr
-except ImportError:                                       # run as a script: python3 pipeline/col_xr.py
-    from public_taxa import PublicTaxaError, load_gate
+    from .public_taxa import PublicTaxaError, _read_csv, load_gate   # imported as pipeline.col_xr
+except ImportError:                                                  # run as a script: python3 pipeline/col_xr.py
+    from public_taxa import PublicTaxaError, _read_csv, load_gate
 
 URL = "https://download.checklistbank.org/col/gbif/gbif-col265.tsv.gz"
 TABLES = ("jp", "nb", "mo", "ea")            # the tables that carry speciesKey
@@ -140,10 +144,11 @@ def exprs(t, cols):
             "genus": f"coalesce({g('col_genus')}, {g('genus')})"}
 
 
-def emit_mask_map(con, gate, out):
-    """data/reference/col_mask_map.csv: source,value,col_key,col_accepted_name for
-    every legacy key and every mask name/alias the gate loads. Fail closed:
-    PublicTaxaError naming each key/name with no COL accepted match (spec §0b STOP)."""
+def crosswalk_matches(con, gate):
+    """(rows, misses) of the gate against the crosswalk only: rows are
+    (source, value, col_key, col_accepted_name) for every key/name that resolves;
+    misses are (kind, value, note) for the rest, note set when a name resolves to
+    more than one accepted taxon."""
     rows, misses = [], []
     keys = {r[0]: (r[1], r[2]) for r in con.execute(
         "select gbif_id, col_accepted_id, col_accepted_name from colmap").fetchall()}
@@ -151,22 +156,70 @@ def emit_mask_map(con, gate, out):
         if k in keys:
             rows.append(("key", k, *keys[k]))
         else:
-            misses.append(f"key {k}")
+            misses.append(("key", k, None))
     for name in sorted(gate.masked_names | gate.ambiguous_names):
         hit = con.execute("""select distinct col_accepted_id, col_accepted_name from colmap
                              where lower(gbif_name) = ? or lower(col_accepted_name) = ?""",
                           (name, name)).fetchall()
         if not hit:
-            misses.append(f"name {name}")
+            misses.append(("name", name, None))
         elif len({h[0] for h in hit}) > 1:
-            misses.append(f"name {name} (ambiguous: {len(hit)} accepted taxa)")
+            misses.append(("name", name, f"ambiguous: {len(hit)} accepted taxa"))
         else:
             rows.append(("name", name, hit[0][0], hit[0][1]))
+    return rows, misses
+
+
+def load_overrides(path):
+    """data/reference/col_mask_overrides.csv (TASK-019), a reviewed input like
+    taxon_mask.csv: (kind, value) -> (col_key, method, reason). Empty col_key =
+    the entry stays legacy-masked. Raises on unknown kind/method or duplicates."""
+    ov = {}
+    for r in _read_csv(path, "col_mask_overrides"):
+        kind, value = (r.get("kind") or "").strip(), (r.get("value") or "").strip()
+        method = (r.get("method") or "").strip()
+        if not value:
+            continue
+        if kind not in ("key", "name"):
+            raise PublicTaxaError(f"col_mask_overrides: unknown kind {kind!r} for {value!r}")
+        if method not in ("api-key", "api-name", "manual"):
+            raise PublicTaxaError(f"col_mask_overrides: unknown method {method!r} for {value!r}")
+        if (kind, value) in ov:
+            raise PublicTaxaError(f"col_mask_overrides: duplicate {kind} {value}")
+        ov[(kind, value)] = ((r.get("col_key") or "").strip(), method, (r.get("reason") or "").strip())
+    if not ov:
+        raise PublicTaxaError(f"col_mask_overrides has no rows: {path}")
+    return ov
+
+
+def emit_mask_map(con, gate, out, overrides=None):
+    """data/reference/col_mask_map.csv: source,value,col_key,col_accepted_name for
+    every legacy key and every mask name/alias the gate loads. Fail closed:
+    PublicTaxaError naming each key/name with neither a crosswalk match nor a
+    reviewed overrides row (spec §0b STOP). An override row with an empty col_key
+    contributes no key (the entry stays legacy-masked) but satisfies the check."""
+    rows, misses = crosswalk_matches(con, gate)
     if misses:
-        raise PublicTaxaError(
-            f"col_mask_map: {len(misses)} gate entr{'y is' if len(misses) == 1 else 'ies are'} "
-            f"without a COL accepted match: {', '.join(misses[:10])}"
-            + (" ..." if len(misses) > 10 else ""))
+        ov = load_overrides(overrides) if overrides else {}
+        rest = []
+        for kind, value, note in misses:
+            hit = ov.get((kind, value))
+            if hit is None:
+                rest.append(f"{kind} {value}" + (f" ({note})" if note else ""))
+            else:                                     # accepted name from the crosswalk when it
+                name = con.execute(                  # knows the COL taxon under another usage
+                    "select col_accepted_name from colmap where col_accepted_id = ? "
+                    "and col_accepted_name <> '' limit 1", [hit[0]]).fetchone() if hit[0] else None
+                rows.append((kind, value, hit[0], name[0] if name else ""))
+        if rest:
+            raise PublicTaxaError(
+                f"col_mask_map: {len(rest)} gate entr{'y is' if len(rest) == 1 else 'ies are'} "
+                f"without a COL accepted match or overrides row: {', '.join(rest[:10])}"
+                + (" ..." if len(rest) > 10 else ""))
+        stale = sorted(set(ov) - {(k, v) for k, v, _ in misses})
+        if stale:
+            raise PublicTaxaError("col_mask_overrides rows no longer needed (crosswalk or gate "
+                                  "changed): " + ", ".join(f"{k} {v}" for k, v in stale))
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     with open(out, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f, lineterminator="\n")
@@ -239,6 +292,8 @@ def main(argv=None):
     ap.add_argument("--db", default="data/shroomhunt.duckdb")
     ap.add_argument("--map", default="data/raw/col/gbif-col265.tsv.gz", help="the crosswalk TSV.gz")
     ap.add_argument("--mask-map", default="data/reference/col_mask_map.csv")
+    ap.add_argument("--overrides", default="data/reference/col_mask_overrides.csv",
+                    help="reviewed gap resolutions (pipeline/col_resolve_gaps.py)")
     ap.add_argument("--diff", help="also write the §0b diff report here")
     ap.add_argument("--mask", default="data/reference/taxon_mask.csv")
     ap.add_argument("--coverage", default="data/reference/redlist_coverage.csv")
@@ -250,7 +305,7 @@ def main(argv=None):
     load_map(con, a.map)
     apply(con)
     old_gate = load_gate(mask=a.mask, coverage=a.coverage, exceptions=a.exceptions, redlist=a.redlist)
-    emit_mask_map(con, old_gate, a.mask_map)
+    emit_mask_map(con, old_gate, a.mask_map, overrides=a.overrides)
     if a.diff:
         new_gate = load_gate(mask=a.mask, coverage=a.coverage, exceptions=a.exceptions,
                              redlist=a.redlist, col_mask=a.mask_map)
