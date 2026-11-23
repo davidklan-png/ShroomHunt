@@ -29,6 +29,13 @@ Cross-dataset dedup (TASK-014): records sharing a normalised (institutionCode, c
 one physical specimen published by two datasets under different gbifIDs — count once, the first
 in gbifID order winning; an empty catalogNumber identifies nothing, so those rows each count.
 
+Overview aggregates (TASK-021): every area (and every island group, summing its
+members' arrays) also ships evidence ([basisOfRecord, n], n desc), id_depth (the
+species/genus/higher buckets of pipeline/taxonomy.py) and decades ([decade, n]
+ascending, 1850-2100 window, year-less records left out) over exactly the record
+set totals.records counts — the gated, area-assigned set, name-routed records
+included, masked records never.
+
 COL XR identity (TASK-018): species identity is coalesce(col_key, 'L'||speciesKey) and the
 display name coalesce(col_name, species); genus/family/order/class come from the COL columns
 of the accepted taxon, null falling back to the backbone. Species rows and candidates carry
@@ -53,6 +60,7 @@ from eligibility import precision_selection, spatially_eligible  # noqa: E402
 from snapshot import write_json  # noqa: E402
 from shared import kind, specimen_key  # noqa: E402
 from col_xr import exprs, keyed  # noqa: E402
+from taxonomy import id_depth_bucket  # noqa: E402
 
 MAX_KM, DECAY_KM, LAT_DECAY = 800, 250, 1.5
 BAND_KM, BAND_CAP = 50, 250   # §6: candidate d is the lower edge of a 50 km band (250 = 250 km+)
@@ -164,6 +172,8 @@ def main():
 
     EVID = {"PRESERVED_SPECIMEN": "s", "MATERIAL_SAMPLE": "d", "LIVING_SPECIMEN": "s", "MATERIAL_CITATION": "s"}
     area_recs = defaultdict(list)       # area -> records
+    area_evidence, area_depth, area_decades = defaultdict(Counter), defaultdict(Counter), defaultdict(Counter)
+    yearless = 0                        # TASK-021: assigned records no decade bin takes
     fam_class = defaultdict(Counter)
     cell_area, tile_prefs = {}, defaultdict(Counter)
     for r in recs:
@@ -185,6 +195,14 @@ def main():
             cell, aid = None, island_by_name(loc, prov)
             if not aid: continue
         area_recs[aid].append((key, sp, fam, rank, EVID.get(bor, "o"), cell, mon, yr, kd, dsk, spk, colk))
+        # TASK-021: the Overview aggregates count exactly the records totals.records counts
+        # (the gated, area-assigned set just built — spatial and name-routed alike).
+        area_evidence[aid][bor] += 1
+        area_depth[aid][id_depth_bucket(rank)] += 1
+        if yr is not None and 1850 <= yr <= 2100:      # the national decades window
+            area_decades[aid][yr // 10 * 10] += 1
+        else:
+            yearless += 1
     for i in islands:   # every known island keeps its route even when its eligible records drop to zero
         area_recs.setdefault(i["id"], [])
 
@@ -286,6 +304,21 @@ def main():
         return out
 
     # ---------- write area files ---------------------------------------------------------------
+    def overview(ev, dep, dec):
+        """TASK-021: the three Overview aggregates in their published shape — evidence
+        by n desc then basis (null last, as the national SQL orders), id_depth the fixed
+        species/genus/higher triple, decades ascending."""
+        return {"evidence": sorted(ev.items(), key=lambda kv: (-kv[1], kv[0] is None, kv[0] or "")),
+                "id_depth": [(b, dep.get(b, 0)) for b in ("species", "genus", "higher")],
+                "decades": sorted(dec.items())}
+
+    def merged_counts(members, field):
+        """Group aggregate: sum the members' published arrays, as totals does."""
+        cnt = Counter()
+        for m in members:
+            for k, n in built[m][field]: cnt[k] += n
+        return cnt
+
     os.makedirs(a.out, exist_ok=True)
     index, built = [], {}
     for aid, lst in sorted(area_recs.items()):
@@ -337,7 +370,9 @@ def main():
                "schema_version": 1, "snapshot": "",
                "totals": {"records": len(lst), "by_name": 0, "species": len(species), "unresolved": unresolved,
                           "squares": len({cell_key(*r[5]) for r in lst if r[5] is not None})},
-               "months": months_all, "top_localities": [],
+               "months": months_all,
+               **overview(area_evidence[aid], area_depth[aid], area_decades[aid]),
+               "top_localities": [],
                # §6: a zero-record entry keeps its route and public reference bbox with empty data
                "species": species, "possible": possible_for(aid, center, set(by_sp)) if lst else []}
         # TASK-012: non-locational sampling bias note — the top datasetKey's share of area records
@@ -385,6 +420,8 @@ def main():
         out = {"id": gid, "kind": "group", "members": members, "name_en": gen, "name_ja": gja, "group_en": gen, "group_ja": gja,
                "bbox": bb, "schema_version": 1, "snapshot": "", "totals": tot,
                "months": [sum(built[m]["months"][k] for m in members) for k in range(12)],
+               **overview(merged_counts(members, "evidence"), merged_counts(members, "id_depth"),
+                          merged_counts(members, "decades")),
                "top_localities": [], "species": species, "possible": possible,
                "member_names": {m: [built[m]["name_en"], built[m]["name_ja"]] for m in members}}
         write_json(os.path.join(a.out, f"{gid}.json"), out)
@@ -398,7 +435,8 @@ def main():
     print(f"{len(index)} areas ({sum(1 for x in index if x['kind']=='island')} islands), {len(cell_area)} squares mapped, "
           f"{masked} sensitive records excluded, precision flags applied={sum(x != 'null' for x in sel)}/5, "
           f"neighbours={'ea' in tables}, dominant_source on {sum(1 for x in built.values() if 'dominant_source' in x)} area(s), "
-          f"cross-dataset duplicates removed: {xdupes}")
+          f"cross-dataset duplicates removed: {xdupes}, "
+          f"records left out of decades (no usable year): {yearless}")
     print(f"gate audit (aggregate): {audit}")
 
 
