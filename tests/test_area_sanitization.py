@@ -148,7 +148,7 @@ class SanitizedAreaDetail(unittest.TestCase):
     def test_withdrawn_fields_are_empty_and_columns_kept(self):
         row = next(s for s in self.ok["species"] if s["n"] == "Prosus lautus")
         self.assertEqual((row["h"], row["l"], row["nm"], row["el"]), ([], [], 0, None))
-        self.assertEqual(sorted(row), ["c", "e", "el", "f", "h", "k", "l", "m", "n", "nm", "r", "sq", "y"])
+        self.assertEqual(sorted(row), ["c", "e", "el", "f", "h", "k", "l", "lk", "m", "n", "nm", "r", "sq", "y"])
         self.assertEqual((row["r"], row["sq"], row["y"]), (2, 1, [2019, 2021]))  # corner + interior: one whole cell
         self.assertEqual(self.ok["top_localities"], [])
         self.assertEqual(self.ok["totals"]["by_name"], 0)
@@ -200,6 +200,16 @@ class SanitizedAreaDetail(unittest.TestCase):
             for p in json.loads(blob).get("possible", []):
                 self.assertIn(p["d"], (0, 50, 100, 150, 200, 250))
 
+    def test_legacy_key_on_every_keyed_row_without_a_col_key(self):
+        # TASK-021: this legacy DB carries no COL keys, so every keyed species row
+        # and candidate — jp-sourced and East Asia alike — keeps its legacy lk.
+        row = next(s for s in self.ok["species"] if s["n"] == "Prosus lautus")
+        self.assertEqual(row["lk"], "5001")
+        for name, lk in (("Neighborus proximus", "5009"),   # jp source (spk 'L'+key)
+                         ("Nearby candidatus", "7009"),     # East Asia 1° source
+                         ("Proximus orientalis", "6001")):
+            self.assertEqual(self.candidates(self.ok, name)["lk"], lk, name)
+
     def test_east_asia_point_outside_mesh_envelope_survives(self):
         # (24,121) cannot be snapped to a 2nd mesh cell: its presence proves East Asia
         # candidates score from the raw 1° cell, not from JIS-snapped centroids
@@ -247,6 +257,35 @@ class SanitizedAreaDetail(unittest.TestCase):
         cells = json.loads(read(os.path.join(build(db, self.islands, self.refs), "index.json")))["cells"]
         self.assertIn("315:1021", cells)                # Uncerus (uncertainty 25000) is spatial when the column is absent
         self.assertEqual(cells["315:1021"], "okisle")
+
+    def test_group_rows_drop_taxon_keys_member_rows_disagree_on(self):
+        # PR #4 review: two COL-unmapped taxa sharing a display name merge into one group
+        # row; it must not inherit one member's legacy key for both. Same key on both
+        # islands is a true merge and keeps it.
+        db = os.path.join(self.tmp, "homonyms.duckdb")
+        c = duckdb.connect(db)
+        c.execute(f"create table jp({JP_COLUMNS})")
+        rows = [
+            ("21", "6001", "Homonymus dubius", "Homonymus", "Fictaceae", "SPECIES", "HUMAN_OBSERVATION",
+             "Agaricomycetes", "Basidiomycota", "26.1", "127.7", "3", "2019", None, "Okinawa", "dx", None, None, None),
+            ("22", "6002", "Homonymus dubius", "Homonymus", "Fictaceae", "SPECIES", "HUMAN_OBSERVATION",
+             "Agaricomycetes", "Basidiomycota", "26.7", "127.75", "5", "2021", None, "Okinawa", "dx", None, None, None),
+            ("23", "6003", "Stabilis fixus", "Stabilis", "Fictaceae", "SPECIES", "HUMAN_OBSERVATION",
+             "Agaricomycetes", "Basidiomycota", "26.1", "127.7", "7", "2020", None, "Okinawa", "dx", None, None, None),
+            ("24", "6003", "Stabilis fixus", "Stabilis", "Fictaceae", "SPECIES", "HUMAN_OBSERVATION",
+             "Agaricomycetes", "Basidiomycota", "26.7", "127.75", "8", "2022", None, "Okinawa", "dx", None, None, None),
+        ]
+        c.executemany("insert into jp values (" + ",".join(["?"] * 15) + ")",
+                      [tuple(r[i] for i in range(1, 16)) for r in rows])
+        c.execute("create table ea(speciesKey varchar, species varchar, family varchar, "
+                  "lat double, lon double, month int, n int)")
+        c.close()
+        group = json.loads(read(os.path.join(build(db, self.islands, self.refs), "g-oki-islands.json")))
+        hom = next(s for s in group["species"] if s["n"] == "Homonymus dubius")
+        self.assertIsNone(hom["lk"])                    # disagreeing keys link nowhere
+        self.assertEqual(hom["i"], ["okisle", "lilisle"])
+        sta = next(s for s in group["species"] if s["n"] == "Stabilis fixus")
+        self.assertEqual(sta["lk"], "6003")             # same key on both islands keeps it
 
 
 DWCA_FULL = ("gbifID\thabitat\tassociatedTaxa\televation\tdataGeneralizations\tinformationWithheld\n"

@@ -22,6 +22,10 @@ Checks:
               [dataset title, share] pair (share 0.30-1.0, TASK-012); a group
               file never does (groups merge members, the builder emits it
               per sampling area only);
+              additive legacy-key fields (TASK-021): species/candidate rows may
+              carry a nullable "lk", leads a 7th legacy-key element — never
+              non-null on a row whose "c"/col_key is set (a COL-keyed row fires
+              the primary /taxon/ link and needs no fallback);
   snapshot    a 64-hex lowercase digest, identical in every occurrence file
               and equal to the recomputed bundle digest (pipeline/snapshot.py);
   integrity   dashboard mesh key set == index cells keys; index area ids ==
@@ -31,9 +35,9 @@ Checks:
   gate        public_taxa.load_gate() is rerun against the reference inputs,
               col_mask_map included (TASK-018: it is a required input here, so
               CI cannot publish without it); no masked/quarantined name and no
-              masked COL key may appear in any species/candidate/lead list
-              (offenders are named by position, never by taxon — protected
-              names stay out of logs);
+              masked COL key or masked legacy key (c/lk, TASK-021) may appear
+              in any species/candidate/lead list (offenders are named by
+              position, never by taxon — protected names stay out of logs);
   prose       no habitat/locality/elevation prose: withdrawn fields must be
               empty and no string may match the known prose fixture patterns;
   budget      gzip-9 size caps per file (§6 table);
@@ -141,11 +145,14 @@ def check_dashboard(d, path, reasons):
                 and is_uint(row[2]) and is_uint(row[3])):
             reasons.append(f"{keys}: mesh[{i}] is not a §6 MeshRow [center_lat, center_lon, records, species]")
     for i, row in enumerate(d["leads"]):
-        if not (isinstance(row, list) and len(row) == 6 and isinstance(row[0], str)
+        if not (isinstance(row, list) and len(row) in (6, 7) and isinstance(row[0], str)
                 and (row[1] is None or isinstance(row[1], str)) and is_uint(row[2]) and is_uint(row[3])
-                and isinstance(row[4], str) and (row[5] is None or isinstance(row[5], str))):
+                and isinstance(row[4], str) and (row[5] is None or isinstance(row[5], str))
+                and (len(row) == 6 or row[6] is None or isinstance(row[6], str))):
             reasons.append(f"{keys}: leads[{i}] is not [species, family|null, neighbour_records, "
-                           f"mo_records, triage_hint, col_key|null]")
+                           f"mo_records, triage_hint, col_key|null] with an optional 7th legacy key|null")
+        elif len(row) == 7 and row[6] is not None and row[5] is not None:
+            reasons.append(f"{keys}: leads[{i}] carries the 7th legacy key alongside col_key")
     if set(d["lead_totals"]) != {"candidates", "with_mo", "with_unresolved_jp_genus"} \
             or not all(is_uint(v) for v in d["lead_totals"].values()):
         reasons.append(f"{keys}: lead_totals is not the three §6 UInt fields")
@@ -267,11 +274,12 @@ def check_area_file(f, path, reasons, ids):
                        f"localities are withdrawn)")
     rwant = RECORDED | ({"i"} if kind == "group" else set())
     for i, s in enumerate(f["species"]):
-        if not isinstance(s, dict) or set(s) != rwant:
-            reasons.append(f"{keys}: species[{i}] key set != §6 RecordedRow")
+        if not isinstance(s, dict) or not rwant <= set(s) <= rwant | {"lk"}:
+            reasons.append(f"{keys}: species[{i}] key set != §6 RecordedRow (+ optional lk)")
             continue
         if not (isinstance(s["n"], str) and s["n"] and isinstance(s["f"], str) and s["k"] in KINDS
                 and (s["c"] is None or isinstance(s["c"], str))      # TASK-018 COL key, nullable
+                and (s.get("lk") is None or isinstance(s["lk"], str))  # TASK-021 legacy key, nullable
                 and is_uint(s["r"]) and is_bins12(s["m"]) and is_uint(s["sq"])
                 and (s["y"] is None or (isinstance(s["y"], list) and len(s["y"]) == 2
                                         and all(is_uint(x) for x in s["y"]) and s["y"][0] <= s["y"][1]))
@@ -280,20 +288,26 @@ def check_area_file(f, path, reasons, ids):
                 and (kind != "group" or (isinstance(s["i"], list) and s["i"]
                                          and all(m in f["members"] for m in s["i"])))):
             reasons.append(f"{keys}: species[{i}] has a mistyped §6 RecordedRow field")
+        if s.get("lk") is not None and s["c"] is not None:
+            reasons.append(f"{keys}: species[{i}] carries lk with c set (a COL-keyed row "
+                           f"fires the primary link and needs no legacy key)")
         if s["h"] != [] or s["l"] != [] or s["nm"] != 0 or s["el"] is not None:
             reasons.append(f"unsafe field: {path}: species[{i}] carries withdrawn "
                            f"habitat/locality/elevation data")
     cwant = CANDIDATE | ({"i"} if kind == "group" else set())
     for i, p in enumerate(f["possible"]):
-        if not isinstance(p, dict) or set(p) != cwant:
-            reasons.append(f"{keys}: possible[{i}] key set != §6 CandidateRow")
+        if not isinstance(p, dict) or not cwant <= set(p) <= cwant | {"lk"}:
+            reasons.append(f"{keys}: possible[{i}] key set != §6 CandidateRow (+ optional lk)")
             continue
         if not (isinstance(p["n"], str) and p["n"] and isinstance(p["f"], str) and p["k"] in KINDS
                 and (p["c"] is None or isinstance(p["c"], str))      # TASK-018 COL key, nullable
+                and (p.get("lk") is None or isinstance(p["lk"], str))  # TASK-021 legacy key, nullable
                 and is_uint(p["s"]) and 1 <= p["s"] <= 100 and p["d"] in BANDS
                 and isinstance(p["w"], str) and isinstance(p["wj"], str) and is_bins12(p["m"])
                 and (kind != "group" or p["i"] in f["members"])):
             reasons.append(f"{keys}: possible[{i}] has a mistyped §6 CandidateRow field")
+        if p.get("lk") is not None and p["c"] is not None:
+            reasons.append(f"{keys}: possible[{i}] carries lk with c set")
 
 
 def check_outline(o, path, reasons):
@@ -400,8 +414,10 @@ def gate_scan(docs, gate, reasons):
             for i, row in enumerate(doc.get("leads", []) if isinstance(doc.get("leads"), list) else []):
                 if isinstance(row, list) and row and listed(row[0], "SPECIES"):
                     reasons.append(f"protected taxon: {path}: leads[{i}] is masked or quarantined by the gate")
-                if isinstance(row, list) and len(row) == 6 and col_listed(row[5]):
+                if isinstance(row, list) and len(row) in (6, 7) and col_listed(row[5]):
                     reasons.append(f"protected taxon: {path}: leads[{i}] carries a masked col_key")
+                if isinstance(row, list) and len(row) == 7 and col_listed(row[6]):
+                    reasons.append(f"protected taxon: {path}: leads[{i}] carries a masked legacy key")
             for i, row in enumerate(doc.get("unresolved_genera", [])
                                     if isinstance(doc.get("unresolved_genera"), list) else []):
                 if isinstance(row, list) and row and listed(row[0], "GENUS"):
@@ -412,11 +428,15 @@ def gate_scan(docs, gate, reasons):
                     reasons.append(f"protected taxon: {path}: species[{i}] is masked or quarantined by the gate")
                 if isinstance(s, dict) and col_listed(s.get("c")):
                     reasons.append(f"protected taxon: {path}: species[{i}] carries a masked col_key")
+                if isinstance(s, dict) and col_listed(s.get("lk")):
+                    reasons.append(f"protected taxon: {path}: species[{i}] carries a masked legacy key")
             for i, p in enumerate(doc.get("possible", []) if isinstance(doc.get("possible"), list) else []):
                 if isinstance(p, dict) and listed(p.get("n"), "SPECIES"):
                     reasons.append(f"protected taxon: {path}: possible[{i}] is masked or quarantined by the gate")
                 if isinstance(p, dict) and col_listed(p.get("c")):
                     reasons.append(f"protected taxon: {path}: possible[{i}] carries a masked col_key")
+                if isinstance(p, dict) and col_listed(p.get("lk")):
+                    reasons.append(f"protected taxon: {path}: possible[{i}] carries a masked legacy key")
         elif path == "mesh-research.json" and isinstance(doc, dict):
             for i, row in enumerate(doc.get("genera", []) if isinstance(doc.get("genera"), list) else []):
                 if isinstance(row, list) and row and listed(row[0], "GENUS"):
