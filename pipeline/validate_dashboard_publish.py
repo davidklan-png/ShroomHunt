@@ -11,7 +11,8 @@ A staging directory holding dashboard.json is the occurrence bundle
 (dashboard.json, areas/index.json, areas/<id>.json for exactly the index's
 ids, optional japan-outline.json and mesh-research.json, and — TASK-024,
 spec item 7 — species/index.json plus the species/<genus-slug>.json files
-its files map names). Without dashboard.json, it is the geography-only
+its files map names, with species/summary.json beside the index (TASK-025)).
+Without dashboard.json, it is the geography-only
 bundle: exactly japan-outline.json. Anything else — dotfiles, scripts,
 stray JSON — rejects.
 
@@ -52,7 +53,11 @@ Checks:
               its snapshot, and every entry must match the item-7 shape, with a
               photo only when author AND licence AND licence_url AND file_page
               are all present (else null) and area ids referencing non-group
-              index areas;
+              index areas; species/summary.json (TASK-025, item 9) must sit
+              beside it, match the index's summary_sha256, and carry one
+              [name, col_key, legacy_key, area_count, record_count, mhlw,
+              endemic] row per index species, ranked by area_count desc then
+              name;
   prose       no habitat/locality/elevation prose: withdrawn fields must be
               empty and no string may match the known prose fixture patterns;
   budget      gzip-9 size caps per file (§6 table);
@@ -72,7 +77,10 @@ BUDGETS = {"dashboard.json": 22, "areas/index.json": 25, "areas/okinawa-honto.js
            "japan-outline.json": 36, "mesh-research.json": 60,
            # TASK-024: one sha256/bytes/species entry per genus (~3k genera on the
            # 2026-11 data); the hex digests do not compress — measured 152 KiB gzip-9
-           "species/index.json": 160}                                 # gzip-9 KiB caps (§6)
+           "species/index.json": 160,
+           # TASK-025: the national item-9 summary — 12,185 rows measured
+           # 660 KiB raw / 173 KiB gzip-9 on the 2026-11 data (names dominate)
+           "species/summary.json": 200}                               # gzip-9 KiB caps (§6)
 DETAIL_BUDGET = 64
 KINDS = {"m", "l", "o"}
 AREA_KINDS = {"island", "tile", "group"}
@@ -109,8 +117,11 @@ RECORDED = {"n", "c", "f", "k", "r", "m", "sq", "y", "e", "h", "l", "nm", "el"}
 CANDIDATE = {"n", "c", "f", "k", "s", "d", "w", "wj", "m"}
 OUTLINE_KEYS = {"schema_version", "source", "bbox", "land", "places"}
 RESEARCH_KEYS = {"schema_version", "snapshot", "slices", "genera"}
-# TASK-024 (spec item 7): the species bundle — per-genus files plus the index.
-SPECIES_INDEX_KEYS = {"schema_version", "snapshot", "generated", "genera", "species", "files"}
+# TASK-024 (spec item 7): the species bundle — per-genus files plus the index
+# (TASK-025 adds summary_sha256 covering the item-9 national summary).
+SPECIES_INDEX_KEYS = {"schema_version", "snapshot", "generated", "genera", "species", "files",
+                      "summary_sha256"}
+SUMMARY_KEYS = {"schema_version", "snapshot", "generated", "species"}
 SPECIES_FILE_KEYS = {"schema_version", "genus", "species"}
 SPECIES_ENTRY_KEYS = {"key", "legacy_key", "name", "name_ja", "family", "order", "class", "kind",
                       "records_by_tier", "fruiting_months", "area_ids", "elevation_band",
@@ -546,7 +557,8 @@ def check_species(files, docs, staging, reasons, ids):
     for slug in fmap:
         if not GENUS_SLUG.match(slug or ""):
             reasons.append(f"shape: species/index.json: files key {slug!r} is not a genus slug")
-    expected = {f"species/{s}.json" for s in fmap} | {"species/index.json"}
+    expected = {f"species/{s}.json" for s in fmap} | {"species/index.json",
+                                                      "species/summary.json"}
     for rel in files:
         if rel.startswith("species/") and rel not in expected:
             reasons.append(f"stray file: {rel} is not in the species index")
@@ -593,6 +605,60 @@ def check_species(files, docs, staging, reasons, ids):
     elif ix["snapshot"] != digest.hexdigest():
         reasons.append("digest mismatch: species/index.json: stamped snapshot != recomputed "
                        "species digest")
+    _check_summary(ix, files, docs, staging, reasons)
+
+
+def _check_summary(ix, files, docs, staging, reasons):
+    """species/summary.json (TASK-025, item 9): the national ranked list. A sibling
+    of the index — required whenever species/ is, hashed by the index's
+    summary_sha256 (never by the genus digest), rows checked for shape, the
+    area_count desc / name asc ranking and agreement with the index species count."""
+    rel = "species/summary.json"
+    if rel not in files:
+        reasons.append(f"missing summary file: {rel} (required whenever species/ is present)")
+        return
+    with open(os.path.join(staging, rel), "rb") as fh:
+        raw = fh.read()
+    sha = ix.get("summary_sha256")
+    if not (isinstance(sha, str) and HEX64.match(sha)):
+        reasons.append(f"shape: species/index.json: summary_sha256 {sha!r} is not a 64-hex "
+                       f"lowercase digest")
+    elif sha != hashlib.sha256(raw).hexdigest():
+        reasons.append(f"digest mismatch: {rel} does not match the index's summary_sha256")
+    sm = docs.get(rel)
+    if not isinstance(sm, dict) or set(sm) != SUMMARY_KEYS:
+        reasons.append(f"shape: {rel} key set != the item 9 summary")
+        return
+    if sm["schema_version"] != 1:
+        reasons.append(f"schema_version: {rel}: {sm['schema_version']!r} is not 1")
+    if not DAY.match(sm["generated"] or ""):
+        reasons.append(f"shape: {rel}: generated {sm['generated']!r} is not a YYYY-MM-DD day")
+    if not (isinstance(sm["snapshot"], str) and HEX64.match(sm["snapshot"])):
+        reasons.append(f"snapshot: {rel}: {sm['snapshot']!r} is not a 64-hex lowercase digest")
+    elif isinstance(ix.get("snapshot"), str) and sm["snapshot"] != ix["snapshot"]:
+        reasons.append(f"digest mismatch: {rel} snapshot != the species index snapshot")
+    rows = sm["species"]
+    if not isinstance(rows, list):
+        reasons.append(f"shape: {rel}: species is not a list")
+        return
+    shaped = True
+    for i, r in enumerate(rows):
+        if not (isinstance(r, list) and len(r) == 7 and isinstance(r[0], str) and r[0]
+                and (r[1] is None or isinstance(r[1], str))
+                and (r[2] is None or isinstance(r[2], str))
+                and is_uint(r[3]) and is_uint(r[4])
+                and isinstance(r[5], bool) and isinstance(r[6], bool)):
+            reasons.append(f"shape: {rel}: species[{i}] is not a [name, col_key|null, "
+                           f"legacy_key|null, area_count, record_count, mhlw, endemic] row")
+            shaped = False
+        elif r[1] is not None and r[2] is not None:
+            reasons.append(f"shape: {rel}: species[{i}] carries legacy_key with col_key set "
+                           f"(a COL-keyed row fires the primary link and needs no legacy fallback)")
+    if shaped and rows != sorted(rows, key=lambda r: (-r[3], r[0])):
+        reasons.append(f"integrity: {rel}: species is not ranked by area_count desc, name asc")
+    if shaped and is_uint(ix.get("species")) and len(rows) != ix["species"]:
+        reasons.append(f"integrity: {rel}: {len(rows)} rows != the index's "
+                       f"{ix['species']} species")
 
 
 # ---------- the scan pieces -------------------------------------------------------------------
@@ -656,13 +722,20 @@ def gate_scan(docs, gate, reasons):
         elif path.startswith("species/") and isinstance(doc, dict):
             # TASK-024: no masked key, legacy key or name anywhere under species/ —
             # masked species get no entry, no marker, no link (spec section 1).
+            # TASK-025: summary.json rows are [name, col_key, legacy_key, ...] tuples.
             for i, e in enumerate(doc.get("species", []) if isinstance(doc.get("species"), list) else []):
-                if isinstance(e, dict) and listed(e.get("name"), "SPECIES"):
+                if isinstance(e, list) and len(e) == 7:
+                    name, key, legacy = e[0], e[1], e[2]
+                elif isinstance(e, dict):
+                    name, key, legacy = e.get("name"), e.get("key"), e.get("legacy_key")
+                else:
+                    continue
+                if listed(name, "SPECIES"):
                     reasons.append(f"protected taxon: {path}: species[{i}] is masked or "
                                    f"quarantined by the gate")
-                if isinstance(e, dict) and col_listed(e.get("key")):
+                if col_listed(key):
                     reasons.append(f"protected taxon: {path}: species[{i}] carries a masked key")
-                if isinstance(e, dict) and col_listed(e.get("legacy_key")):
+                if col_listed(legacy):
                     reasons.append(f"protected taxon: {path}: species[{i}] carries a masked "
                                    f"legacy key")
 
@@ -721,7 +794,8 @@ def _occurrence(files, docs, staging, gate_args, reasons, require_species=False)
     allowed = {"dashboard.json", "areas/index.json", "japan-outline.json", "mesh-research.json"} \
         | {f"areas/{i}.json" for i in ids}
     if isinstance(six, dict) and isinstance(six.get("files"), dict):
-        allowed |= {"species/index.json"} | {f"species/{s}.json" for s in six["files"]}
+        allowed |= {"species/index.json", "species/summary.json"} \
+            | {f"species/{s}.json" for s in six["files"]}
     for rel in files:
         if rel not in allowed:
             reasons.append(f"stray file: {rel} is not part of the publish bundle")

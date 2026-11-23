@@ -6,7 +6,11 @@ carrying our own facts plus the reviewed external enrichment; species/index.json
 carries the snapshot digest, the build date, the counts and a sha256/size/species
 entry per file. Genus files are canonical JSON with no timestamps inside, so an
 unchanged genus rewrites to identical bytes and a refresh touches only what
-changed (the file is left untouched byte-for-byte).
+changed (the file is left untouched byte-for-byte). Beside the index,
+species/summary.json (TASK-025, item 9) is the national per-species ranked list
+[name, col_key, legacy_key, area_count, record_count, mhlw, endemic] the map
+disclosure reads; the index carries its sha256 as summary_sha256 so it is
+covered without joining the genus digest.
 
 Our own facts per species (spec section 1, no edibility anywhere): COL key +
 legacy key, names and classification, record count by evidence tier (all gated
@@ -278,7 +282,8 @@ def main(argv=None):
         files[slug] = {"sha256": hashlib.sha256(raw).hexdigest(),
                        "species": len(doc["species"]), "bytes": len(raw)}
     for name in (os.listdir(a.out) if os.path.isdir(a.out) else []):  # lost every species
-        if name.endswith(".json") and name[:-5] not in files and name != "index.json":
+        if name.endswith(".json") and name[:-5] not in files \
+                and name not in ("index.json", "summary.json"):
             os.remove(os.path.join(a.out, name))
             print(f"species: removed stale {name}")
 
@@ -286,9 +291,28 @@ def main(argv=None):
     for slug in sorted(files):
         with open(os.path.join(a.out, f"{slug}.json"), "rb") as fh:
             digest.update(fh.read())
+    # TASK-025 (item 9): the national per-species summary — every public species
+    # ranked by area count, the month-less backbone the map disclosure reads. A
+    # sibling of the index, byte-stable like the genus files and covered by the
+    # index's summary_sha256 instead of the species digest (a refresh stays cheap).
+    summary = {"schema_version": 1, "snapshot": digest.hexdigest(),
+               "generated": time.strftime("%Y-%m-%d"),
+               "species": sorted(([e["name"], e["key"], e["legacy_key"], len(e["area_ids"]),
+                                   sum(e["records_by_tier"].values()),
+                                   bool(e["external"]["mhlw_url"]),
+                                   e["external"]["endemic_hosoya2016"]]
+                                  for e in entries.values()),
+                                  key=lambda r: (-r[3], r[0]))}
+    sraw = (canonical(summary) + "\n").encode("utf-8")
+    spath = os.path.join(a.out, "summary.json")
+    if not (os.path.exists(spath) and open(spath, "rb").read() == sraw):
+        os.makedirs(a.out, exist_ok=True)
+        with open(spath, "wb") as fh:
+            fh.write(sraw)
     index = {"schema_version": 1, "snapshot": digest.hexdigest(),
              "generated": time.strftime("%Y-%m-%d"), "genera": len(files),
-             "species": sum(f["species"] for f in files.values()), "files": files}
+             "species": sum(f["species"] for f in files.values()), "files": files,
+             "summary_sha256": hashlib.sha256(sraw).hexdigest()}
     os.makedirs(a.out, exist_ok=True)
     with open(os.path.join(a.out, "index.json"), "w", newline="\n", encoding="utf-8") as f:
         f.write(canonical(index) + "\n")
@@ -299,6 +323,7 @@ def main(argv=None):
     print(f"{a.out}: {len(files)} genus files, {n} species (public), "
           f"{masked} masked records excluded, "
           f"{sum(f['bytes'] for f in files.values()):,} bytes genus files; "
+          f"summary {len(summary['species'])} rows / {len(sraw):,} bytes; "
           f"photo {ext('photo')}, mhlw {ext('mhlw_url')}, endemic "
           f"{sum(1 for e in entries.values() if e['external']['endemic_hosoya2016'])}, "
           f"literature {ext('literature')}, mushroomexpert {ext('mushroomexpert_url')}, "
