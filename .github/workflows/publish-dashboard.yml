@@ -152,7 +152,7 @@ jobs:
           python3 pipeline/validate_dashboard_publish.py staging \
             --mask data/reference/taxon_mask.csv --coverage data/reference/redlist_coverage.csv \
             --exceptions data/reference/match_exceptions.csv --redlist data/raw/redlist/redlist_fungi_jp.json \
-            --col-mask-map data/reference/col_mask_map.csv
+            --col-mask-map data/reference/col_mask_map.csv --require-species
 
       - name: Open pull request on Bio_HP
         if: ${{ inputs.enable_public_pr == true }}

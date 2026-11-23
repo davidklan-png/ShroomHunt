@@ -682,7 +682,7 @@ def _load_all(staging, files, reasons):
     return docs, gz
 
 
-def validate(staging, gate_args=None):
+def validate(staging, gate_args=None, require_species=False):
     """(reasons, gzip sizes) — an empty reason list means publishable."""
     reasons = []
     files = sorted(os.path.relpath(os.path.join(root, n), staging).replace(os.sep, "/")
@@ -690,7 +690,7 @@ def validate(staging, gate_args=None):
     docs, gz = _load_all(staging, files, reasons)
 
     if "dashboard.json" in files:
-        _occurrence(files, docs, staging, gate_args, reasons)
+        _occurrence(files, docs, staging, gate_args, reasons, require_species=require_species)
     elif "japan-outline.json" in files:
         for rel in files:
             if rel != "japan-outline.json":
@@ -714,7 +714,7 @@ def validate(staging, gate_args=None):
     return reasons, gz
 
 
-def _occurrence(files, docs, staging, gate_args, reasons):
+def _occurrence(files, docs, staging, gate_args, reasons, require_species=False):
     ix = docs.get("areas/index.json")
     ids = check_index(ix, "areas/index.json", reasons) if isinstance(ix, dict) else {}
     six = docs.get("species/index.json")
@@ -728,7 +728,13 @@ def _occurrence(files, docs, staging, gate_args, reasons):
     for aid in ids:
         if f"areas/{aid}.json" not in files:
             reasons.append(f"missing area file: areas/{aid}.json is in the index but not on disk")
-    if any(rel.startswith("species/") for rel in files):
+    if "species/index.json" not in files:
+        if require_species:
+            # PR #7 review: a skipped, deleted or misdirected species build must fail
+            # closed in the publish workflow, not silently skip the species checks
+            reasons.append("missing species/index.json: --require-species is set but "
+                           "no species bundles are present")
+    else:
         check_species(files, docs, staging, reasons, ids)
 
     stamps = set()
@@ -842,12 +848,14 @@ def main(argv=None):
     ap.add_argument("--coverage", default="data/reference/redlist_coverage.csv")
     ap.add_argument("--exceptions", default="data/reference/match_exceptions.csv")
     ap.add_argument("--redlist", default="data/raw/redlist/redlist_fungi_jp.json")
+    ap.add_argument("--require-species", action="store_true",
+                    help="fail when species bundles are absent (the publish workflow sets this)")
     ap.add_argument("--col-mask-map", default="data/reference/col_mask_map.csv",
                     help="required input (TASK-018): COL XR mask map; missing blocks validation")
     args = ap.parse_args(argv)
     gate_args = {k: getattr(args, k) for k in ("mask", "coverage", "exceptions", "redlist")}
     gate_args["col_mask"] = args.col_mask_map
-    reasons, gz = validate(args.staging, gate_args)
+    reasons, gz = validate(args.staging, gate_args, require_species=args.require_species)
     if reasons:
         print(f"{args.staging}: NOT publishable — {len(reasons)} reason(s):", file=sys.stderr)
         for r in reasons:

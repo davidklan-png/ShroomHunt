@@ -38,7 +38,7 @@ import duckdb
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from public_taxa import SPECIES_RANKS, load_gate  # noqa: E402
 from col_xr import ensure, exprs, keyed  # noqa: E402
-from shared import kind  # noqa: E402
+from shared import dedup_temp_jp, kind  # noqa: E402
 from snapshot import canonical  # noqa: E402
 from sources.wikidata import ACCEPTABLE, classify_licence  # noqa: E402
 
@@ -169,12 +169,20 @@ def main(argv=None):
             elev, assoc = "null", "null"
             print("species: no jp_extra table; elevation_band and host_genera stay null",
                   file=sys.stderr)
+        # PR #7 review: cross-dataset specimen dedup, the same TASK-016 idiom the
+        # dashboard and area builders apply, so tier/month counts match published semantics
+        dropped = dedup_temp_jp(con)
+        if dropped:
+            print(f"species bundles: {dropped} cross-dataset duplicates dropped",
+                  file=sys.stderr)
         rows = con.execute(f"""select {X['sp_key']}, {X['col_key']}, {X['sp_name']},
                                       {X['family']}, {X['order']}, {X['class']}, {X['genus']},
                                       jp.taxonRank, jp.basisOfRecord, try_cast(jp.month as int),
                                       try_cast(jp.year as int), jp.speciesKey, {elev}, {assoc}
                                from jp{extra}
-                               where {X['sp_key']} is not null""").fetchall()
+                               where {X['sp_key']} is not null
+                                 and jp.taxonRank in ('SPECIES', 'VARIETY', 'SUBSPECIES', 'FORM')
+                                 and {X['sp_name']} like '% %'""").fetchall()
         east = set()
         if "ea" in tables:
             ea_cols = {r[0] for r in con.execute(

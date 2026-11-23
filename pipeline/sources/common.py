@@ -57,7 +57,8 @@ def public_species(db):
         rows = con.execute(f"""select {X['sp_key']}, {X['col_key']}, {X['sp_name']},
                                       {X['genus']}, {X['family']},
                                       string_agg(distinct speciesKey::varchar, '|')
-                               from jp where speciesKey is not null and {gate.sql_where("jp")}
+                               from jp where speciesKey is not null and jp.taxonRank in ('SPECIES','VARIETY','SUBSPECIES','FORM')
+                                      and species like '% %' and {gate.sql_where("jp")}
                                group by 1,2,3,4,5""").fetchall()
     finally:
         con.close()

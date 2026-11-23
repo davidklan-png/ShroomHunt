@@ -176,10 +176,10 @@ class SpeciesBundles(unittest.TestCase):
             cls.index = json.load(f)
 
     @classmethod
-    def validate(cls, path):
+    def validate(cls, path, *extra):
         return subprocess.run([sys.executable, os.path.join(REPO, "pipeline",
                                                             "validate_dashboard_publish.py"),
-                               path, *cls.refs], capture_output=True, text=True, cwd=REPO)
+                               path, *cls.refs, *extra], capture_output=True, text=True, cwd=REPO)
 
     def genus(self, slug):
         with open(os.path.join(self.staging, "species", f"{slug}.json")) as f:
@@ -398,6 +398,24 @@ class SpeciesBundles(unittest.TestCase):
                         text.index("cp -r staging/species"))
 
 
+    def test_require_species_flag_rejects_a_bundle_without_species(self):
+        # PR #7 review: the publish workflow passes --require-species; a staging
+        # without species/index.json must fail closed instead of skipping the checks
+        import shutil as _sh
+        src = None
+        for cls_staging in (getattr(self, "staging", None),):
+            src = cls_staging
+        self.assertIsNotNone(src, "no staging fixture on this class; move the test")
+        no_species = os.path.join(self.tmp, "no-species")
+        _sh.copytree(src, no_species)
+        _sh.rmtree(os.path.join(no_species, "species"))
+        r = self.validate(no_species, "--require-species")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("require-species", r.stderr)
+        r2 = self.validate(no_species)                      # without the flag: old bundles stay valid
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+
+
 class EnrichJoin(unittest.TestCase):
     """pipeline/enrich.py over fixture source caches: the join itself, graceful
     degradation on missing caches, and the last-retrieved fallback."""
@@ -539,7 +557,5 @@ class EnrichJoin(unittest.TestCase):
         self.assertEqual(rows["L5001"]["wikidata_qid"], "Q111")
         self.assertNotEqual(rows["L5001"]["photo_thumb_url"], "")
         self.assertNotEqual(rows["L5001"]["literature"], "")
-
-
 if __name__ == "__main__":
     unittest.main()
