@@ -272,6 +272,44 @@ class PublishContract(unittest.TestCase):
             self.edit(p, "areas/okisle.json", lambda d: d["species"][0].update(c="COLK1"))
         self.reject(masked, "protected taxon", "masked col_key", restamp=True)
 
+    def test_legacy_key_fields_are_additive(self):
+        # TASK-021: lk and the 7th lead element are additive — a bundle without them
+        # (the v1 shape live readers already know) stays publishable.
+        path = self.copy()
+        self.edit(path, "dashboard.json", lambda d: d["leads"][0].pop())
+        self.edit(path, "areas/okisle.json", lambda d: d["species"][0].pop("lk"))
+        r = run_builder("snapshot.py", path)
+        assert r.returncode == 0, r.stdout + r.stderr
+        r = self.validate(path)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_legacy_key_alongside_col_key_rejects(self):
+        # TASK-021: a non-null lk on a row whose "c"/col_key is set — the row fires
+        # the primary /taxon/ link and must not claim a legacy fallback too.
+        def species(p):
+            self.edit(p, "areas/okisle.json", lambda d: d["species"][0].update(c="COLX", lk="5001"))
+        self.reject(species, "species[0] carries lk with c set", restamp=True)
+
+        def candidate(p):
+            self.edit(p, "areas/okisle.json", lambda d: d["possible"][0].update(c="COLX", lk="5009"))
+        self.reject(candidate, "possible[0] carries lk with c set", restamp=True)
+
+        def lead(p):
+            self.edit(p, "dashboard.json",
+                      lambda d: d["leads"][0].__setitem__(5, "COLX") or d["leads"][0].__setitem__(6, "7009"))
+        self.reject(lead, "legacy key alongside col_key", restamp=True)
+
+    def test_masked_legacy_key_in_lk_rejects(self):
+        # TASK-021: lk carries a legacy backbone key, so the gate scans it like "c" —
+        # a masked key fails even under an innocent name the backbone never listed.
+        def species(p):
+            self.edit(p, "areas/okisle.json", lambda d: d["species"][0].update(lk="9001"))
+        self.reject(species, "masked legacy key", restamp=True)
+
+        def lead(p):
+            self.edit(p, "dashboard.json", lambda d: d["leads"][0].__setitem__(6, "9001"))
+        self.reject(lead, "masked legacy key", restamp=True)
+
     def test_prose_field_rejects(self):
         def prose(p):
             self.edit(p, "areas/okisle.json", lambda d: d["species"][0].update(h=["on dead Quercus wood"]))

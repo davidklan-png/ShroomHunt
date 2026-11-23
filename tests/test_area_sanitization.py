@@ -148,7 +148,7 @@ class SanitizedAreaDetail(unittest.TestCase):
     def test_withdrawn_fields_are_empty_and_columns_kept(self):
         row = next(s for s in self.ok["species"] if s["n"] == "Prosus lautus")
         self.assertEqual((row["h"], row["l"], row["nm"], row["el"]), ([], [], 0, None))
-        self.assertEqual(sorted(row), ["c", "e", "el", "f", "h", "k", "l", "m", "n", "nm", "r", "sq", "y"])
+        self.assertEqual(sorted(row), ["c", "e", "el", "f", "h", "k", "l", "lk", "m", "n", "nm", "r", "sq", "y"])
         self.assertEqual((row["r"], row["sq"], row["y"]), (2, 1, [2019, 2021]))  # corner + interior: one whole cell
         self.assertEqual(self.ok["top_localities"], [])
         self.assertEqual(self.ok["totals"]["by_name"], 0)
@@ -199,6 +199,16 @@ class SanitizedAreaDetail(unittest.TestCase):
         for blob in self.raw.values():
             for p in json.loads(blob).get("possible", []):
                 self.assertIn(p["d"], (0, 50, 100, 150, 200, 250))
+
+    def test_legacy_key_on_every_keyed_row_without_a_col_key(self):
+        # TASK-021: this legacy DB carries no COL keys, so every keyed species row
+        # and candidate — jp-sourced and East Asia alike — keeps its legacy lk.
+        row = next(s for s in self.ok["species"] if s["n"] == "Prosus lautus")
+        self.assertEqual(row["lk"], "5001")
+        for name, lk in (("Neighborus proximus", "5009"),   # jp source (spk 'L'+key)
+                         ("Nearby candidatus", "7009"),     # East Asia 1° source
+                         ("Proximus orientalis", "6001")):
+            self.assertEqual(self.candidates(self.ok, name)["lk"], lk, name)
 
     def test_east_asia_point_outside_mesh_envelope_survives(self):
         # (24,121) cannot be snapped to a 2nd mesh cell: its presence proves East Asia

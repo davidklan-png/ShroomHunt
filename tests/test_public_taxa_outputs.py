@@ -120,6 +120,8 @@ class GatedOutputs(unittest.TestCase):
 
     def test_national_leads_exclude_masked_and_ambiguous(self):
         self.assertEqual({l[0] for l in self.out["leads"]}, {"Nearby candidatus"})
+        # TASK-021: the appended 7th element is the legacy key of this COL-less lead
+        self.assertEqual(self.out["leads"][0][5:], [None, "7009"])
         self.assertEqual(self.out["lead_totals"]["with_mo"], 1)
 
     def test_unresolved_genera_publish_genus_names(self):

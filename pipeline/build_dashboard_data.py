@@ -124,9 +124,23 @@ mesh = [[*cell_center(row, col), n, len(sp)] for (row, col), (n, sp) in cells.it
 mesh.sort(key=lambda r: (-r[2], r[0], r[1]))       # records desc, then place: deterministic
 
 # TASK-018: leads carry the COL key as an appended sixth element (additive contract).
-leads = rows("""select species, family, neighbour_records, mo_records, triage_hint, col_key
-                from neighbour_candidates
-                where mo_records > 0 order by neighbour_records desc, mo_records desc, species limit 60""")
+# TASK-021: a seventh element carries the legacy backbone key, set only when col_key is
+# null (a lumped species fires the primary /taxon/ link and needs no fallback). The
+# neighbour SQL drops spk inside its grouping, so the legacy key joins back from nb on
+# (species, family); a backbone homonym — same name+family under two legacy keys —
+# keeps lk null rather than risk a wrong link.
+leads = rows("""select nc.species, nc.family, nc.neighbour_records, nc.mo_records, nc.triage_hint,
+                      nc.col_key,
+                      case when nc.col_key is null then k.legacy_key else null end as legacy_key
+               from neighbour_candidates nc
+               left join (select species, family, min(speciesKey::varchar) as legacy_key
+                          from nb where taxonRank = 'SPECIES' and taxonomicStatus = 'ACCEPTED'
+                            and speciesKey is not null and col_key is null
+                          group by 1, 2 having count(distinct speciesKey) = 1) k
+                 on k.species is not distinct from nc.species
+                and k.family is not distinct from nc.family
+               where nc.mo_records > 0
+               order by nc.neighbour_records desc, nc.mo_records desc, nc.species limit 60""")
 # lead_totals.candidates counts every neighbour candidate (the "no Japanese record"
 # total the page leads with) — the old key name "neighbour_only" wrongly implied
 # MO-less ones (TASK-017).
