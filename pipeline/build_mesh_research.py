@@ -72,6 +72,7 @@ from public_taxa import load_gate  # noqa: E402
 from eligibility import precision_selection, spatially_eligible  # noqa: E402
 from snapshot import write_json  # noqa: E402
 from shared import kind, specimen_key  # noqa: E402
+from col_xr import exprs, keyed  # noqa: E402
 
 MIN_RECORDS, MIN_EVENTS, MIN_SHARE_SIDE = 10, 3, 5
 GENUS_MIN_RECORDS, GENUS_MIN_CELLS, GENUS_MIN_EVENTS = 10, 3, 3
@@ -85,27 +86,30 @@ ap.add_argument("--redlist", default="data/raw/redlist/redlist_fungi_jp.json")
 ap.add_argument("--mask", default="data/reference/taxon_mask.csv")
 ap.add_argument("--coverage", default="data/reference/redlist_coverage.csv")
 ap.add_argument("--exceptions", default="data/reference/match_exceptions.csv")
+ap.add_argument("--col-mask-map", default="data/reference/col_mask_map.csv")
 ap.add_argument("--islands", default="data/reference/islands.csv")
 ap.add_argument("--taxon-names", default="data/reference/taxon_names.csv")
 a = ap.parse_args()
 
 c = duckdb.connect(a.db)
-gate = load_gate(mask=a.mask, coverage=a.coverage, exceptions=a.exceptions, redlist=a.redlist)
+gate = load_gate(mask=a.mask, coverage=a.coverage, exceptions=a.exceptions, redlist=a.redlist,
+                 col_mask=a.col_mask_map if keyed(c, "jp") else None)
 elig_join, sel = precision_selection(c)
 
 jp_cols = {r[0] for r in c.execute(
     "select column_name from information_schema.columns where table_name='jp'").fetchall()}
+X = exprs("jp", jp_cols)   # TASK-018: name/classification fall back to the backbone columns
 DEDUP = next((k for k in ("gbifID", "occurrenceID") if k in jp_cols), None)
 def col(n): return f"jp.{n}" if n in jp_cols else "null"
 rows = c.execute(f"""
-  select {col('speciesKey')}, {col('species')}, {col('genus')}, {col('family')}, {col('taxonRank')},
-         {col('class')}, {col('basisOfRecord')}, try_cast({col('month')} as int),
+  select {col('speciesKey')}, {X['sp_name']}, {X['genus']}, {X['family']}, {col('taxonRank')},
+         {X['class']}, {col('basisOfRecord')}, try_cast({col('month')} as int),
          try_cast({col('decimalLatitude')} as double), try_cast({col('decimalLongitude')} as double),
          {col('datasetKey')}, {col('eventID')},
          {col('recordedBy')}, {col(DEDUP) if DEDUP else 'null'},
-         {col('institutionCode')}, {col('catalogNumber')}, {", ".join(sel)}
+         {col('institutionCode')}, {col('catalogNumber')}, {", ".join(sel)}, {X['col_key']}
   from jp {elig_join}""" + (f" order by jp.{DEDUP} nulls last" if DEDUP else "")).fetchall()
-audit = gate.audit((r[1], r[0], r[2], r[4]) for r in rows)
+audit = gate.audit((r[1], r[0], r[2], r[4], r[21]) for r in rows)
 
 # ---------- eligible records into joint month x kind slices ---------------------------------
 slices = defaultdict(lambda: defaultdict(lambda: [0, set(), 0]))   # (month, kind) -> cell -> [n, events, genus-rank n]
@@ -113,7 +117,7 @@ genus_hits = defaultdict(list)                                     # folded genu
 seen, dupes = set(), 0
 pairs, xdupes = set(), 0                                           # TASK-014 cross-dataset specimen pairs
 for r in rows:
-    sk, sp, gen, fam, rank, cls, bor, mon, lat, lon, dsk, eid, rby, sid, inst, cat, unc, prec, iss, genz, held = r
+    sk, sp, gen, fam, rank, cls, bor, mon, lat, lon, dsk, eid, rby, sid, inst, cat, unc, prec, iss, genz, held, colk = r
     if sid is not None and str(sid).strip():
         s = str(sid).strip()
         if s in seen:
@@ -126,7 +130,7 @@ for r in rows:
             xdupes += 1
             continue
         pairs.add(pair)
-    if not gate.is_public(species=sp, species_key=sk, genus=gen, taxon_rank=rank): continue
+    if not gate.is_public(species=sp, species_key=sk, genus=gen, taxon_rank=rank, col_key=colk): continue
     cell = mesh_cell(lat, lon)
     if cell is None or not spatially_eligible(unc, prec, iss, genz, held): continue
     ev = None

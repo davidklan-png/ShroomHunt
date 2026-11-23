@@ -1,0 +1,16 @@
+# FICTIONAL test fixture for TASK-018 — taxa and COL ids do not exist. Never mix
+# with real names. This is the shape pipeline/col_xr.py emit_mask_map() generates:
+# one row per gate-loaded legacy key (source=key) and per mask name/alias or Red
+# List name (source=name, folded), each resolved to its COL accepted id and name.
+source,value,col_key,col_accepted_name
+key,9001,COLK1,Rareus japonicus
+name,rareus japonicus,COLK1,Rareus japonicus
+key,9002,COLK2,Dubius certus
+name,dubius ambiguus,COLK2,Dubius certus
+name,matsutakus fictus,COLK3,Matsutakus verus
+name,tricholoma fictum,COLK3,Matsutakus verus
+name,armillaria ficta,COLK3,Matsutakus verus
+name,boletus fictus,COLK3,Matsutakus verus
+name,maskedus apocryphus,COLK4,Maskedus apocryphus
+name,oldus apocryphus,COLK4,Maskedus apocryphus
+name,falsus apocryphus,COLK4,Maskedus apocryphus

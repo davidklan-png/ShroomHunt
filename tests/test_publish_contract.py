@@ -59,7 +59,8 @@ class PublishContract(unittest.TestCase):
         cls.refs = ["--mask", os.path.join(FIX, "taxon_mask.csv"),
                     "--coverage", write_coverage(cls.tmp),
                     "--exceptions", os.path.join(FIX, "match_exceptions.csv"),
-                    "--redlist", os.path.join(FIX, "redlist.json")]
+                    "--redlist", os.path.join(FIX, "redlist.json"),
+                    "--col-mask-map", os.path.join(FIX, "col_mask_map.csv")]
         raw = os.path.join(cls.tmp, "raw")
         os.makedirs(raw)
         tsv(os.path.join(raw, "jp.tsv"), JP_HEADER, JP_ROWS)
@@ -254,15 +255,22 @@ class PublishContract(unittest.TestCase):
     def test_masked_taxon_in_species_list_rejects(self):
         def masked(p):
             self.edit(p, "areas/okisle.json", lambda d: d["species"].append(
-                {"n": "Tricholoma fictum", "f": "Fictaceae", "k": "m", "r": 1, "m": [0] * 12,
+                {"n": "Tricholoma fictum", "c": None, "f": "Fictaceae", "k": "m", "r": 1, "m": [0] * 12,
                  "sq": 0, "y": None, "e": {}, "h": [], "l": [], "nm": 0, "el": None}))
         self.reject(masked, "protected taxon", restamp=True)
 
     def test_masked_taxon_in_leads_rejects(self):
         def masked(p):
             self.edit(p, "dashboard.json",
-                      lambda d: d["leads"].append(["Dubius ambiguus", None, 40, 1, "genus known in Japan"]))
+                      lambda d: d["leads"].append(["Dubius ambiguus", None, 40, 1, "genus known in Japan", None]))
         self.reject(masked, "protected taxon", restamp=True)
+
+    def test_masked_col_key_in_species_list_rejects(self):
+        # TASK-018: a masked COL key in the additive "c" field fails validation even
+        # when the name is an innocent synonym the backbone never listed.
+        def masked(p):
+            self.edit(p, "areas/okisle.json", lambda d: d["species"][0].update(c="COLK1"))
+        self.reject(masked, "protected taxon", "masked col_key", restamp=True)
 
     def test_prose_field_rejects(self):
         def prose(p):

@@ -62,6 +62,28 @@ jobs:
           STAGING_REPO: ${{ vars.STAGING_REPO || secrets.STAGING_REPO }}
         run: python3 pipeline/fetch_latest_release_assets.py
 
+      - name: Restore COL XR crosswalk cache
+        # TASK-018: the ~500MB gbif-col265.tsv.gz is cached under its Last-Modified
+        # (the sidecar fetch_col_mapping.py writes); a stale restore just means the
+        # fetch step re-downloads via If-Modified-Since.
+        if: ${{ inputs.geography_only != true }}
+        uses: actions/cache/restore@v4
+        with:
+          path: data/raw/col
+          key: col-map-v1-placeholder
+          restore-keys: col-map-v1-
+
+      - name: Fetch COL XR mapping
+        if: ${{ inputs.geography_only != true }}
+        run: python3 pipeline/fetch_col_mapping.py
+
+      - name: Save COL XR crosswalk cache
+        if: ${{ inputs.geography_only != true }}
+        uses: actions/cache/save@v4
+        with:
+          path: data/raw/col
+          key: col-map-v1-${{ hashFiles('data/raw/col/gbif-col265.tsv.gz.last-modified') }}
+
       - name: Build database and the v1 occurrence bundle into staging
         if: ${{ inputs.geography_only != true }}
         run: |
@@ -70,7 +92,8 @@ jobs:
           ea=$(ls data/raw/gbif/eastasia/* 2>/dev/null | head -1)
           [ -n "$ea" ] && extra="$extra --eastasia $ea"
           python3 pipeline/build_db.py --japan data/raw/gbif/japan/*.csv --neighbours data/raw/gbif/neighbours/*.csv \
-            --mo data/raw/gbif/mushroomobserver/*.csv --db data/shroomhunt.duckdb $extra
+            --mo data/raw/gbif/mushroomobserver/*.csv --db data/shroomhunt.duckdb \
+            --col-map data/raw/col/gbif-col265.tsv.gz $extra
           python3 pipeline/build_dashboard_data.py --out staging/dashboard.json \
             --meta $(ls data/raw/gbif/*.json) --redlist data/raw/redlist/redlist_fungi_jp.json
           python3 pipeline/build_areas.py --out staging/areas --redlist data/raw/redlist/redlist_fungi_jp.json
@@ -95,7 +118,8 @@ jobs:
         run: |
           python3 pipeline/validate_dashboard_publish.py staging \
             --mask data/reference/taxon_mask.csv --coverage data/reference/redlist_coverage.csv \
-            --exceptions data/reference/match_exceptions.csv --redlist data/raw/redlist/redlist_fungi_jp.json
+            --exceptions data/reference/match_exceptions.csv --redlist data/raw/redlist/redlist_fungi_jp.json \
+            --col-mask-map data/reference/col_mask_map.csv
 
       - name: Open pull request on Bio_HP
         if: ${{ inputs.enable_public_pr == true }}

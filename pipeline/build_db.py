@@ -2,9 +2,12 @@
 """Load downloaded GBIF files into one DuckDB database.
 
 Usage: python3 pipeline/build_db.py --japan J.csv --neighbours N.csv --mo M.csv
-                                    [--japan-dwca occurrence.txt] [--eastasia E.csv] [--db data/shroomhunt.duckdb]
+                                    [--japan-dwca occurrence.txt] [--eastasia E.csv]
+                                    [--col-map data/raw/col/gbif-col265.tsv.gz] [--db data/shroomhunt.duckdb]
 (the CSV/TSV files are inside the release zips). Needs: pip install duckdb
-Tables: jp, nb, mo, and optionally jp_extra (gbifID, habitat from the DwC-A) and ea (East Asia cells)."""
+Tables: jp, nb, mo, and optionally jp_extra (gbifID, habitat from the DwC-A) and ea (East Asia cells).
+--col-map (TASK-018) loads the COL XR crosswalk into colmap and re-keys every speciesKey
+table with the col_* columns (pipeline/col_xr.py); without it the build stays on legacy keys."""
 import argparse, duckdb
 
 ap = argparse.ArgumentParser()
@@ -13,6 +16,7 @@ ap.add_argument("--neighbours", required=True)
 ap.add_argument("--mo", required=True)
 ap.add_argument("--japan-dwca")
 ap.add_argument("--eastasia")
+ap.add_argument("--col-map")
 ap.add_argument("--db", default="data/shroomhunt.duckdb")
 a = ap.parse_args()
 
@@ -55,3 +59,7 @@ if a.eastasia:
         from {r(a.eastasia)} where speciesKey is not null and species is not null
         group by all""")
     print("ea", c.execute("select count(*), sum(n), count(distinct species) from ea").fetchone(), "(cells, records, species)")
+if a.col_map:                      # TASK-018: COL XR re-keying; last, so ea (created above)
+    from col_xr import apply, load_map   # exists too — review PR #2 P1: applying before the
+    load_map(c, a.col_map)               # eastasia block left ea on legacy keys
+    apply(c)

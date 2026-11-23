@@ -148,7 +148,7 @@ class SanitizedAreaDetail(unittest.TestCase):
     def test_withdrawn_fields_are_empty_and_columns_kept(self):
         row = next(s for s in self.ok["species"] if s["n"] == "Prosus lautus")
         self.assertEqual((row["h"], row["l"], row["nm"], row["el"]), ([], [], 0, None))
-        self.assertEqual(sorted(row), ["e", "el", "f", "h", "k", "l", "m", "n", "nm", "r", "sq", "y"])
+        self.assertEqual(sorted(row), ["c", "e", "el", "f", "h", "k", "l", "m", "n", "nm", "r", "sq", "y"])
         self.assertEqual((row["r"], row["sq"], row["y"]), (2, 1, [2019, 2021]))  # corner + interior: one whole cell
         self.assertEqual(self.ok["top_localities"], [])
         self.assertEqual(self.ok["totals"]["by_name"], 0)

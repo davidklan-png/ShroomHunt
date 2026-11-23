@@ -29,6 +29,12 @@ Cross-dataset dedup (TASK-014): records sharing a normalised (institutionCode, c
 one physical specimen published by two datasets under different gbifIDs — count once, the first
 in gbifID order winning; an empty catalogNumber identifies nothing, so those rows each count.
 
+COL XR identity (TASK-018): species identity is coalesce(col_key, 'L'||speciesKey) and the
+display name coalesce(col_name, species); genus/family/order/class come from the COL columns
+of the accepted taxon, null falling back to the backbone. Species rows and candidates carry
+the COL key as the additive "c" field (null when unmapped). A DB that carries COL keys
+requires data/reference/col_mask_map.csv (fail closed, pipeline/col_xr.py).
+
 Usage: python3 pipeline/build_areas.py --out data/processed/areas  [--db data/shroomhunt.duckdb]
        [--redlist data/raw/redlist/redlist_fungi_jp.json]
 Tables used: jp (GBIF SIMPLE_CSV), optional jp_extra (gbifID, habitat and the DwC-A precision notes),
@@ -46,6 +52,7 @@ from public_taxa import SPECIES_RANKS, load_gate  # noqa: E402
 from eligibility import precision_selection, spatially_eligible  # noqa: E402
 from snapshot import write_json  # noqa: E402
 from shared import kind, specimen_key  # noqa: E402
+from col_xr import exprs, keyed  # noqa: E402
 
 MAX_KM, DECAY_KM, LAT_DECAY = 800, 250, 1.5
 BAND_KM, BAND_CAP = 50, 250   # §6: candidate d is the lower edge of a 50 km band (250 = 250 km+)
@@ -58,6 +65,7 @@ def main():
     ap.add_argument("--mask", default="data/reference/taxon_mask.csv")
     ap.add_argument("--coverage", default="data/reference/redlist_coverage.csv")
     ap.add_argument("--exceptions", default="data/reference/match_exceptions.csv")
+    ap.add_argument("--col-mask-map", default="data/reference/col_mask_map.csv")
     ap.add_argument("--islands", default="data/reference/islands.csv")
     ap.add_argument("--titles", help="optional JSON {datasetKey: title} resolving dominant_source "
                                      "titles offline (tests); misses still go to the GBIF API")
@@ -84,7 +92,9 @@ def main():
     tables = {r[0] for r in c.execute("select table_name from information_schema.tables").fetchall()}
 
     # ---------- shared protected-taxon gate (TASK-002) -----------------------------------------
-    gate = load_gate(mask=a.mask, coverage=a.coverage, exceptions=a.exceptions, redlist=a.redlist)
+    # TASK-018: a DB that carries COL keys gates on them too, and requires col_mask_map.
+    gate = load_gate(mask=a.mask, coverage=a.coverage, exceptions=a.exceptions, redlist=a.redlist,
+                     col_mask=a.col_mask_map if keyed(c, "jp") else None)
 
     # ---------- source-precision eligibility (§7) ------------------------------------------------
     # Shared with build_dashboard_data.py since TASK-006 (pipeline/eligibility.py), so a cell
@@ -97,19 +107,22 @@ def main():
     # gbifID order pins which duplicate survives (the first), keeping output deterministic.
     jp_cols = {r[0] for r in c.execute(
         "select column_name from information_schema.columns where table_name='jp'").fetchall()}
+    X = exprs("jp", jp_cols)   # TASK-018: name/classification fall back to the backbone columns
     specimen_cols = ", ".join(f"jp.{n}" if n in jp_cols else "null" for n in ("institutionCode", "catalogNumber"))
     rows = c.execute(f"""
-      select jp.speciesKey, jp.species, jp.family, jp.taxonRank, jp.basisOfRecord, jp.class, jp.genus,
+      select jp.speciesKey, {X['sp_name']}, {X['family']}, jp.taxonRank, jp.basisOfRecord,
+             {X['class']}, {X['genus']},
              try_cast(jp.decimalLatitude as double), try_cast(jp.decimalLongitude as double),
              try_cast(jp.month as int), try_cast(jp.year as int), jp.locality, jp.stateProvince,
-             jp.datasetKey, {specimen_cols}, {", ".join(sel)}
+             jp.datasetKey, {specimen_cols}, {", ".join(sel)}, {X['sp_key']}, {X['col_key']}
       from jp {elig_join}""" + (" order by jp.gbifID nulls last" if "gbifID" in jp_cols else "")).fetchall()
-    audit = gate.audit((r[1], r[0], r[6], r[3]) for r in rows)
+    audit = gate.audit((r[1], r[0], r[6], r[3], r[22]) for r in rows)
     # TASK-014: dedup on the normalised specimen pair after the gbifID-ordered fetch, before
     # any counting; rows without a usable pair (either side empty) each count.
     recs, seen_pair, xdupes = [], set(), 0
     for r in rows:
-        if not gate.is_public(species=r[1], species_key=r[0], genus=r[6], taxon_rank=r[3]): continue
+        if not gate.is_public(species=r[1], species_key=r[0], genus=r[6], taxon_rank=r[3],
+                              col_key=r[22]): continue
         pair = specimen_key(r[14], r[15])
         if pair is not None:
             if pair in seen_pair:
@@ -154,7 +167,8 @@ def main():
     fam_class = defaultdict(Counter)
     cell_area, tile_prefs = {}, defaultdict(Counter)
     for r in recs:
-        key, sp, fam, rank, bor, cls, gen, lat, lon, mon, yr, loc, prov, dsk, inst, cat, unc, prec, iss, genz, held = r
+        (key, sp, fam, rank, bor, cls, gen, lat, lon, mon, yr, loc, prov, dsk, inst, cat,
+         unc, prec, iss, genz, held, spk, colk) = r
         fam_class[fam or ""][cls] += 1
         kd = kind(cls, fam, gen or (sp or "").split(" ")[0])
         cell = mesh_cell(lat, lon)
@@ -170,7 +184,7 @@ def main():
             # island's record totals by name — by_name reports that as 0 (§1C keeps the column).
             cell, aid = None, island_by_name(loc, prov)
             if not aid: continue
-        area_recs[aid].append((key, sp, fam, rank, EVID.get(bor, "o"), cell, mon, yr, kd, dsk))
+        area_recs[aid].append((key, sp, fam, rank, EVID.get(bor, "o"), cell, mon, yr, kd, dsk, spk, colk))
     for i in islands:   # every known island keeps its route even when its eligible records drop to zero
         area_recs.setdefault(i["id"], [])
 
@@ -200,26 +214,37 @@ def main():
         return (sum(cell_center(r, cl[0])[0] for r in rl) / len(rl),
                 sum(cell_center(rl[0], cc)[1] for cc in cl) / len(cl))
 
-    jp_points = defaultdict(lambda: defaultdict(lambda: [0] * 13))   # sp -> (cell centre, label) -> [12 months + total]
+    jp_points = defaultdict(lambda: defaultdict(lambda: [0] * 13))   # species -> (cell centre, label) -> [12 months + total]
     for aid, lst in area_recs.items():
-        for (key, sp, fam, rank, ev, cell, mon, yr, kd, dsk) in lst:
+        for (key, sp, fam, rank, ev, cell, mon, yr, kd, dsk, spk, colk) in lst:
             if rank in SPECIES_RANKS and sp and cell is not None:   # eligible records only (TASK-005)
-                v = jp_points[(sp, fam or "", kd)][(*cell_center(*cell), aid)]   # one public centroid per mesh
+                # TASK-018: identity is the COL key — backbone synonyms lumped under one
+                # accepted id share the tuple, so they merge as one candidate source.
+                v = jp_points[(spk, fam or "", kd, sp, colk)][(*cell_center(*cell), aid)]
                 v[12] += 1
                 # TASK-012: candidate months are fruiting evidence; the v[12] record total keeps all
                 if ev != "d" and mon and 1 <= mon <= 12: v[mon - 1] += 1
     if "nb" in tables:
-        for fam, cls, n in c.execute("select family, class, count(*) from nb where family is not null group by 1,2").fetchall():
+        nb_cols = {r[0] for r in c.execute(
+            "select column_name from information_schema.columns where table_name='nb'").fetchall()}
+        N = exprs("nb", nb_cols)
+        for fam, cls, n in c.execute(f"""select {N['family']}, {N['class']}, count(*) from nb
+                                         where {N['family']} is not null group by 1,2""").fetchall():
             fam_class[fam][cls] += n
     def fam_kind(fam, sp):
         cls = sorted(fam_class[fam].items(), key=lambda kv: (-kv[1], kv[0]))[0][0] if fam_class.get(fam) else None
         return kind(cls, fam, (sp or "").split(" ")[0])
 
     if "ea" in tables:
-        for key, sp, fam, lat, lon, mon, n in c.execute(
-                "select speciesKey, species, coalesce(family,''), try_cast(lat as double), try_cast(lon as double), try_cast(\"month\" as int), try_cast(n as int) from ea where species is not null").fetchall():
-            if not gate.is_public(species=sp, species_key=key) or lat is None: continue
-            v = jp_points[(sp, fam, fam_kind(fam, sp))][(lat, lon, "ea")]
+        ea_cols = {r[0] for r in c.execute(
+            "select column_name from information_schema.columns where table_name='ea'").fetchall()}
+        E = exprs("ea", ea_cols)
+        for key, sp, colk, spk, fam, lat, lon, mon, n in c.execute(
+                f"""select speciesKey, {E['sp_name']}, {E['col_key']}, {E['sp_key']}, {E['family']},
+                           try_cast(lat as double), try_cast(lon as double), try_cast("month" as int),
+                           try_cast(n as int) from ea where species is not null""").fetchall():
+            if not gate.is_public(species=sp, species_key=key, col_key=colk) or lat is None: continue
+            v = jp_points[(spk, fam or "", fam_kind(fam, sp), sp, colk)][(lat, lon, "ea")]
             v[12] += n or 0
             if mon and 1 <= mon <= 12: v[mon - 1] += n or 0
 
@@ -233,8 +258,8 @@ def main():
 
     def possible_for(aid, center, present):
         best = {}
-        for (sp, fam, kd), pts in jp_points.items():
-            if sp in present: continue
+        for (spk, fam, kd, sp, colk), pts in jp_points.items():
+            if spk in present: continue
             score, near, months = 0.0, None, [0] * 12
             for (lat, lon, where), v in sorted(pts.items()):   # fixed order: identical float sums under row shuffles
                 if where == aid: continue
@@ -245,17 +270,19 @@ def main():
                 for k in range(12): months[k] += v[k]
                 if near is None or d < near[0]:
                     near = (d, neighbour_place(lat, lon) if where == "ea" else place_label(where))
-            if score > 0 and (sp not in best or score > best[sp][0]): best[sp] = (score, fam, near, months, kd)
+            if score > 0 and (spk not in best or score > best[spk][0]): best[spk] = (score, fam, near, months, kd, sp, colk)
         out = []
         for k in ("m", "l", "o"):            # top 40 of each kind, scored against the best of that kind
-            top = sorted(((sp, v) for sp, v in best.items() if v[4] == k), key=lambda kv: (-kv[1][0], kv[0]))[:40]
+            top = sorted(((spk, v) for spk, v in best.items() if v[4] == k),
+                         key=lambda kv: (-kv[1][0], kv[0]))[:40]
             if not top: continue
             mx = top[0][1][0]
             # nearby-evidence lead: d is the lower edge of a 50 km band from the public area
             # centre to the nearest source centroid (§6); s stays the 1–100 within-kind priority.
             out += [{"n": sp, "f": fam, "k": kd, "s": max(1, round(100 * sc / mx)),
                      "d": min(BAND_CAP, BAND_KM * int(near[0] // BAND_KM)), "w": near[1][0],
-                     "wj": near[1][1], "m": months} for sp, (sc, fam, near, months, kd) in top]
+                     "wj": near[1][1], "m": months, "c": colk or None}
+                    for spk, (sc, fam, near, months, kd, sp, colk) in top]
         return out
 
     # ---------- write area files ---------------------------------------------------------------
@@ -279,14 +306,16 @@ def main():
         by_sp = {}
         unresolved = 0
         months_all = [0] * 12
-        for (key, sp, fam, rank, ev, cell, mon, yr, kd, dsk) in lst:
+        for (key, sp, fam, rank, ev, cell, mon, yr, kd, dsk, spk, colk) in lst:
             # TASK-012: months are fruiting evidence (non-'d'); totals/sq/y/e keep every record
             if ev != "d" and cell is not None and mon and 1 <= mon <= 12: months_all[mon - 1] += 1
             if rank not in SPECIES_RANKS or not sp:
                 unresolved += 1
                 continue
-            s = by_sp.setdefault(sp, {"n": sp, "f": fam or "", "k": kd, "r": 0, "m": [0] * 12, "sq": set(),
-                                      "y": [9999, 0], "e": Counter()})
+            # TASK-018: keyed by the COL identity — lumped backbone synonyms share spk and
+            # merge here; n is the COL accepted name, c the COL key (null when unmapped).
+            s = by_sp.setdefault(spk, {"n": sp, "c": colk or None, "f": fam or "", "k": kd, "r": 0,
+                                       "m": [0] * 12, "sq": set(), "y": [9999, 0], "e": Counter()})
             s["r"] += 1
             if cell is not None:
                 if ev != "d" and mon and 1 <= mon <= 12: s["m"][mon - 1] += 1
@@ -298,8 +327,9 @@ def main():
             # §6 RecordedRow (TASK-005): habitat prose (h), localities (l), elevation (el) and the
             # by-name count (nm) are withdrawn — empty values; the site renders the em dash.
             # n/f/k/r/m/sq/y/e keep their meaning. sq/m come from eligible whole cells only.
-            species.append({"n": s["n"], "f": s["f"], "k": s["k"], "r": s["r"], "m": s["m"], "sq": len(s["sq"]),
-                            "y": s["y"] if s["y"][1] else None,
+            # c is the additive COL XR key (TASK-018).
+            species.append({"n": s["n"], "c": s["c"], "f": s["f"], "k": s["k"], "r": s["r"], "m": s["m"],
+                            "sq": len(s["sq"]), "y": s["y"] if s["y"][1] else None,
                             "e": dict(sorted(s["e"].items(), key=lambda kv: (-kv[1], kv[0]))),
                             "h": [], "l": [], "nm": 0, "el": None})
         out = {"id": aid, "kind": "island" if isl else "tile", "name_en": name_en, "name_ja": name_ja,
@@ -335,7 +365,8 @@ def main():
             for x in built[mid]["species"]:
                 # complete cell unions (§6): group rows merge the members' whole-cell sq and
                 # eligible months; withdrawn fields (h/l/el/nm) stay empty placeholders.
-                t = sp.setdefault(x["n"], {"n": x["n"], "f": x["f"], "k": x["k"], "r": 0, "m": [0] * 12, "sq": 0, "y": None,
+                t = sp.setdefault(x["n"], {"n": x["n"], "c": x["c"], "f": x["f"], "k": x["k"], "r": 0,
+                                          "m": [0] * 12, "sq": 0, "y": None,
                                           "e": Counter(), "h": [], "l": [], "nm": 0, "i": [], "el": None})
                 t["r"] += x["r"]; t["sq"] += x["sq"]; t["i"].append(mid)
                 t["m"] = [p + q for p, q in zip(t["m"], x["m"])]

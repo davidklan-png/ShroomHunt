@@ -1,0 +1,10 @@
+# FICTIONAL test fixture for TASK-019 — taxa and COL ids do not exist. Shape of
+# data/reference/col_mask_overrides.csv: one row per emit_mask_map miss, kind
+# key|name; empty col_key = reviewed legacy-masked (no COL key); method
+# api-key|api-name|manual; reason free text (slug-prefixed). Pairs with the
+# col_xr fixture crosswalk minus rows 9001 and 7003 (dropping 9001 orphans the
+# key AND the name "rareus japonicus", which no other row carries).
+kind,value,col_key,method,reason
+key,9001,CRLX1,api-key,accepted by usage key on the live service
+name,rareus japonicus,CRLX2,api-name,accepted by name on the live service
+name,armillaria ficta,,api-name,infraspecific-unresolved: only the parent species matched
