@@ -98,6 +98,39 @@ jobs:
             --meta $(ls data/raw/gbif/*.json) --redlist data/raw/redlist/redlist_fungi_jp.json
           python3 pipeline/build_areas.py --out staging/areas --redlist data/raw/redlist/redlist_fungi_jp.json
 
+      - name: Restore species enrichment cache
+        # TASK-024: enrich.py joins the reviewed reference CSVs with the cached
+        # source outputs (data/raw/sources, gitignored, produced by the reviewed
+        # local runs of pipeline/sources/*). The retrieval sidecar keys the cache;
+        # a miss degrades to the committed enrichment.csv (warning only, never
+        # blocks publish) and the save step re-keys it after this run.
+        if: ${{ inputs.geography_only != true }}
+        uses: actions/cache/restore@v4
+        with:
+          path: data/raw/sources
+          key: enrich-v1-${{ hashFiles('data/reference/enrichment-retrieved.txt') }}
+          restore-keys: enrich-v1-
+
+      - name: Enrich species references and build the species bundles
+        # spec item 7: enrich.py joins the sources' outputs into
+        # data/reference/enrichment.csv (+ retrieval sidecar), then the bundle
+        # builder writes species/<genus>.json + index.json beside the areas —
+        # area_ids and could-be-found invert the area tables just built.
+        if: ${{ inputs.geography_only != true }}
+        run: |
+          python3 pipeline/enrich.py --db data/shroomhunt.duckdb \
+            --redlist data/raw/redlist/redlist_fungi_jp.json
+          python3 pipeline/build_species_bundles.py --db data/shroomhunt.duckdb \
+            --out staging/species --areas staging/areas \
+            --redlist data/raw/redlist/redlist_fungi_jp.json
+
+      - name: Save species enrichment cache
+        if: ${{ inputs.geography_only != true }}
+        uses: actions/cache/save@v4
+        with:
+          path: data/raw/sources
+          key: enrich-v1-${{ hashFiles('data/reference/enrichment-retrieved.txt') }}
+
       - name: Build research payload and stamp the bundle
         # §5 row 3A: mesh-research.json always joins the staging bundle when occurrence
         # data is built (the validator accepts it, and the genus allowlist seed keeps
@@ -119,7 +152,7 @@ jobs:
           python3 pipeline/validate_dashboard_publish.py staging \
             --mask data/reference/taxon_mask.csv --coverage data/reference/redlist_coverage.csv \
             --exceptions data/reference/match_exceptions.csv --redlist data/raw/redlist/redlist_fungi_jp.json \
-            --col-mask-map data/reference/col_mask_map.csv
+            --col-mask-map data/reference/col_mask_map.csv --require-species
 
       - name: Open pull request on Bio_HP
         if: ${{ inputs.enable_public_pr == true }}
@@ -137,6 +170,7 @@ jobs:
           else
             cp staging/dashboard.json site/assets/data/shroomhunt/dashboard.json
             rm -rf site/assets/data/shroomhunt/areas && cp -r staging/areas site/assets/data/shroomhunt/areas
+            rm -rf site/assets/data/shroomhunt/species && cp -r staging/species site/assets/data/shroomhunt/species
             [ -f staging/japan-outline.json ] && cp staging/japan-outline.json site/assets/data/shroomhunt/japan-outline.json
             [ -f staging/mesh-research.json ] && cp staging/mesh-research.json site/assets/data/shroomhunt/mesh-research.json
             title="Update Japan fungi dashboard data"

@@ -9,9 +9,11 @@ Exit 0 = publishable. Exit 1 = NOT publishable, with every reason on stderr.
 
 A staging directory holding dashboard.json is the occurrence bundle
 (dashboard.json, areas/index.json, areas/<id>.json for exactly the index's
-ids, optional japan-outline.json and mesh-research.json). Without one, it is
-the geography-only bundle: exactly japan-outline.json. Anything else —
-dotfiles, scripts, stray JSON — rejects.
+ids, optional japan-outline.json and mesh-research.json, and — TASK-024,
+spec item 7 — species/index.json plus the species/<genus-slug>.json files
+its files map names). Without dashboard.json, it is the geography-only
+bundle: exactly japan-outline.json. Anything else — dotfiles, scripts,
+stray JSON — rejects.
 
 Checks:
   allowlist   exactly the files the builders own (above);
@@ -42,15 +44,22 @@ Checks:
               col_mask_map included (TASK-018: it is a required input here, so
               CI cannot publish without it); no masked/quarantined name and no
               masked COL key or masked legacy key (c/lk, TASK-021) may appear
-              in any species/candidate/lead list (offenders are named by
-              position, never by taxon — protected names stay out of logs);
+              in any species/candidate/lead list, and no masked key, legacy key
+              or name anywhere under species/ (TASK-024) — offenders are named
+              by position, never by taxon — protected names stay out of logs);
+              species/index.json must cover exactly the genus files on disk
+              (counts, bytes, sha256), carry the recomputed species digest as
+              its snapshot, and every entry must match the item-7 shape, with a
+              photo only when author AND licence AND licence_url AND file_page
+              are all present (else null) and area ids referencing non-group
+              index areas;
   prose       no habitat/locality/elevation prose: withdrawn fields must be
               empty and no string may match the known prose fixture patterns;
   budget      gzip-9 size caps per file (§6 table);
   rectangle   every published mesh centre reconstructs to its key's rectangle
               (full set: cheap enough, and it is the publication geometry).
 """
-import argparse, gzip, json, os, re, sys
+import argparse, gzip, hashlib, json, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from geo_ja import (COL_MAX, COL_MIN, ROW_MAX, ROW_MIN, cell_center,  # noqa: E402
@@ -60,12 +69,18 @@ from snapshot import bundle_digest  # noqa: E402
 
 KIB = 1024
 BUDGETS = {"dashboard.json": 22, "areas/index.json": 25, "areas/okinawa-honto.json": 24,
-           "japan-outline.json": 36, "mesh-research.json": 60}       # gzip-9 KiB caps (§6)
+           "japan-outline.json": 36, "mesh-research.json": 60,
+           # TASK-024: one sha256/bytes/species entry per genus (~3k genera on the
+           # 2026-11 data); the hex digests do not compress — measured 152 KiB gzip-9
+           "species/index.json": 160}                                 # gzip-9 KiB caps (§6)
 DETAIL_BUDGET = 64
 KINDS = {"m", "l", "o"}
 AREA_KINDS = {"island", "tile", "group"}
 RANKS = {"species", "genus", "higher"}
 AGG_KEYS = {"evidence", "id_depth", "decades"}   # TASK-021: the Overview aggregate trio
+TIERS = {"s", "d", "o"}                          # TASK-024: records_by_tier evidence codes
+SPECIES_LEVELS = {"species", "genus", None}      # MushroomExpert link level, nullable
+DECADE_MIN, DECADE_MAX = 1850, 2100              # the national decades window
 BANDS = {0, 50, 100, 150, 200, 250}
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -94,6 +109,18 @@ RECORDED = {"n", "c", "f", "k", "r", "m", "sq", "y", "e", "h", "l", "nm", "el"}
 CANDIDATE = {"n", "c", "f", "k", "s", "d", "w", "wj", "m"}
 OUTLINE_KEYS = {"schema_version", "source", "bbox", "land", "places"}
 RESEARCH_KEYS = {"schema_version", "snapshot", "slices", "genera"}
+# TASK-024 (spec item 7): the species bundle — per-genus files plus the index.
+SPECIES_INDEX_KEYS = {"schema_version", "snapshot", "generated", "genera", "species", "files"}
+SPECIES_FILE_KEYS = {"schema_version", "genus", "species"}
+SPECIES_ENTRY_KEYS = {"key", "legacy_key", "name", "name_ja", "family", "order", "class", "kind",
+                      "records_by_tier", "fruiting_months", "area_ids", "elevation_band",
+                      "host_genera", "east_asia", "could_be_found_area_ids", "first_decade",
+                      "last_decade", "external"}
+EXTERNAL_KEYS = {"wikidata_qid", "wikipedia_ja", "wikipedia_en", "photo", "mhlw_url",
+                 "endemic_hosoya2016", "literature", "mushroomexpert_url",
+                 "mushroomexpert_level"}
+PHOTO_KEYS = {"thumb_url", "file_page", "author", "licence", "licence_url"}
+GENUS_SLUG = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 
 # ---------- small typed predicates (bool is not a number, True is not a UInt) ----------------
@@ -418,6 +445,156 @@ def check_research(r, path, reasons, ids):
                            f"string-names element, over index ids")
 
 
+# ---------- the species bundle (TASK-024, spec item 7) ----------------------------------------
+
+def _check_species_entry(e, path, i, reasons, ids):
+    """One item-7 species entry: exact key set, per-field types, the photo
+    completeness rule and area-id references."""
+    keys = f"shape: {path}"
+    what = f"species[{i}]"
+    if not isinstance(e, dict) or set(e) != SPECIES_ENTRY_KEYS:
+        reasons.append(f"{keys}: {what} key set != item 7 species entry")
+        return
+    if not (isinstance(e["name"], str) and e["name"]
+            and (e["key"] is None or isinstance(e["key"], str))
+            and (e["legacy_key"] is None or isinstance(e["legacy_key"], str))
+            and (e["name_ja"] is None or isinstance(e["name_ja"], str))
+            and all(isinstance(e[k], str) for k in ("family", "order", "class"))
+            and e["kind"] in KINDS
+            and isinstance(e["records_by_tier"], dict) and set(e["records_by_tier"]) <= TIERS
+            and all(is_uint(v) for v in e["records_by_tier"].values())
+            and is_bins12(e["fruiting_months"])
+            and isinstance(e["area_ids"], list) and all(isinstance(x, str) for x in e["area_ids"])
+            and (e["elevation_band"] is None or (isinstance(e["elevation_band"], list)
+                                                 and len(e["elevation_band"]) == 2
+                                                 and all(is_num(x) for x in e["elevation_band"])
+                                                 and e["elevation_band"][0] <= e["elevation_band"][1]))
+            and (e["host_genera"] is None or (isinstance(e["host_genera"], list)
+                                              and e["host_genera"]
+                                              and all(isinstance(x, str) and x for x in e["host_genera"])))
+            and e["east_asia"] in (True, False)
+            and isinstance(e["could_be_found_area_ids"], list)
+            and all(isinstance(x, str) for x in e["could_be_found_area_ids"])
+            and all(e[k] is None or (is_uint(e[k]) and DECADE_MIN <= e[k] <= DECADE_MAX)
+                    for k in ("first_decade", "last_decade"))):
+        reasons.append(f"{keys}: {what} has a mistyped item-7 field")
+    if e.get("legacy_key") is not None and e.get("key") is not None:
+        reasons.append(f"{keys}: {what} carries legacy_key with key set (a COL-keyed entry "
+                       f"fires the primary link and needs no legacy fallback)")
+    if isinstance(e.get("first_decade"), int) and isinstance(e.get("last_decade"), int) \
+            and e["first_decade"] > e["last_decade"]:
+        reasons.append(f"{keys}: {what} first_decade > last_decade")
+    for field in ("area_ids", "could_be_found_area_ids"):
+        for j, aid in enumerate(e.get(field) or []):
+            if aid not in ids:
+                reasons.append(f"integrity: {path}: {what}.{field}[{j}] is not in the area index")
+            elif ids[aid] == "group":
+                reasons.append(f"integrity: {path}: {what}.{field}[{j}] is a group; island/tile "
+                               f"ids only (groups derive from their members)")
+    x = e.get("external")
+    if not isinstance(x, dict) or set(x) != EXTERNAL_KEYS:
+        reasons.append(f"{keys}: {what}.external key set != the item 7 external block")
+        return
+    if not ((x["wikidata_qid"] is None or isinstance(x["wikidata_qid"], str))
+            and (x["wikipedia_ja"] is None or isinstance(x["wikipedia_ja"], str))
+            and (x["wikipedia_en"] is None or isinstance(x["wikipedia_en"], str))
+            and (x["mhlw_url"] is None or isinstance(x["mhlw_url"], str))
+            and x["endemic_hosoya2016"] in (True, False)
+            and (x["mushroomexpert_url"] is None or isinstance(x["mushroomexpert_url"], str))
+            and x["mushroomexpert_level"] in SPECIES_LEVELS):
+        reasons.append(f"{keys}: {what}.external has a mistyped field")
+    p = x["photo"]
+    if p is not None and not (isinstance(p, dict) and set(p) == PHOTO_KEYS
+                              and all(isinstance(p[k], str) and p[k] for k in PHOTO_KEYS)):
+        reasons.append(f"{keys}: {what}.external.photo needs thumb_url, file_page, author, "
+                       f"licence AND licence_url, all non-empty — or null")
+    if not isinstance(x["literature"], list) or len(x["literature"]) > 5 \
+            or not all(isinstance(r, dict) and set(r) == {"doi", "title", "year"}
+                       and isinstance(r["doi"], str) and r["doi"]
+                       and isinstance(r["title"], str) and r["title"]
+                       and (r["year"] is None or (is_uint(r["year"])))
+                       for r in x["literature"]):
+        reasons.append(f"{keys}: {what}.external.literature is not <=5 {{doi, title, year: "
+                       f"UInt|null}} rows")
+
+
+def check_species(files, docs, staging, reasons, ids):
+    """species/ acceptance (TASK-024): the index covers exactly the genus files on
+    disk with matching hashes and counts, carries the recomputed species digest,
+    and every entry matches the item-7 shape (photo completeness included)."""
+    ix = docs.get("species/index.json")
+    if not isinstance(ix, dict):
+        reasons.append("shape: species/index.json is missing or not an object (species/ files "
+                       "are present)")
+        return
+    if set(ix) != SPECIES_INDEX_KEYS:
+        reasons.append(f"shape: species/index.json key set != the item 7 index "
+                       f"({sorted(set(ix) ^ SPECIES_INDEX_KEYS)} differ)")
+        return
+    if ix["schema_version"] != 1:
+        reasons.append(f"schema_version: species/index.json: {ix['schema_version']!r} is not 1")
+    if not DAY.match(ix["generated"] or ""):
+        reasons.append(f"shape: species/index.json: generated {ix['generated']!r} is not a "
+                       f"YYYY-MM-DD day")
+    fmap = ix["files"]
+    if not isinstance(fmap, dict) or not fmap \
+            or not all(isinstance(v, dict) and set(v) == {"sha256", "species", "bytes"}
+                       and is_uint(v["species"]) and is_uint(v["bytes"])
+                       and isinstance(v["sha256"], str) for v in fmap.values()):
+        reasons.append("shape: species/index.json: files is not {slug: {sha256, species, bytes}}")
+        return
+    for slug in fmap:
+        if not GENUS_SLUG.match(slug or ""):
+            reasons.append(f"shape: species/index.json: files key {slug!r} is not a genus slug")
+    expected = {f"species/{s}.json" for s in fmap} | {"species/index.json"}
+    for rel in files:
+        if rel.startswith("species/") and rel not in expected:
+            reasons.append(f"stray file: {rel} is not in the species index")
+    for slug in fmap:
+        if f"species/{slug}.json" not in files:
+            reasons.append(f"missing species file: species/{slug}.json is in the index but not "
+                           f"on disk")
+    if is_uint(ix["genera"]) and ix["genera"] != len(fmap):
+        reasons.append(f"integrity: species/index.json: genera {ix['genera']} != {len(fmap)} files")
+    if is_uint(ix["species"]) and ix["species"] != sum(v["species"] for v in fmap.values()):
+        reasons.append(f"integrity: species/index.json: species {ix['species']} != the summed "
+                       f"per-file counts")
+    digest = hashlib.sha256()
+    for slug in sorted(fmap):
+        path = os.path.join(staging, "species", f"{slug}.json")
+        if not os.path.exists(path):
+            continue                                  # already reported missing above
+        with open(path, "rb") as fh:
+            raw = fh.read()
+        digest.update(raw)
+        meta = fmap[slug]
+        if meta["sha256"] != hashlib.sha256(raw).hexdigest() or meta["bytes"] != len(raw):
+            reasons.append(f"integrity: species/{slug}.json does not match its index entry "
+                           f"(sha256/bytes)")
+        d = docs.get(f"species/{slug}.json")
+        if not isinstance(d, dict) or set(d) != SPECIES_FILE_KEYS:
+            reasons.append(f"shape: species/{slug}.json key set != the item 7 genus file")
+            continue
+        if d["schema_version"] != 1:
+            reasons.append(f"schema_version: species/{slug}.json: {d['schema_version']!r} is not 1")
+        if not isinstance(d["genus"], str) or re.sub(r"[^a-z0-9]+", "-", d["genus"].lower()).strip("-") != slug:
+            reasons.append(f"integrity: species/{slug}.json genus does not slug to its filename")
+        if not isinstance(d["species"], list):
+            reasons.append(f"shape: species/{slug}.json: species is not a list")
+            continue
+        if meta["species"] != len(d["species"]):
+            reasons.append(f"integrity: species/{slug}.json: index species count "
+                           f"{meta['species']} != {len(d['species'])} entries")
+        for i, e in enumerate(d["species"]):
+            _check_species_entry(e, f"species/{slug}.json", i, reasons, ids)
+    if not (isinstance(ix["snapshot"], str) and HEX64.match(ix["snapshot"])):
+        reasons.append(f"snapshot: species/index.json: {ix['snapshot']!r} is not a 64-hex "
+                       f"lowercase digest")
+    elif ix["snapshot"] != digest.hexdigest():
+        reasons.append("digest mismatch: species/index.json: stamped snapshot != recomputed "
+                       "species digest")
+
+
 # ---------- the scan pieces -------------------------------------------------------------------
 
 def iter_strings(obj):
@@ -476,6 +653,18 @@ def gate_scan(docs, gate, reasons):
             for i, row in enumerate(doc.get("genera", []) if isinstance(doc.get("genera"), list) else []):
                 if isinstance(row, list) and row and listed(row[0], "GENUS"):
                     reasons.append(f"protected taxon: {path}: genera[{i}] is in a masked genus")
+        elif path.startswith("species/") and isinstance(doc, dict):
+            # TASK-024: no masked key, legacy key or name anywhere under species/ —
+            # masked species get no entry, no marker, no link (spec section 1).
+            for i, e in enumerate(doc.get("species", []) if isinstance(doc.get("species"), list) else []):
+                if isinstance(e, dict) and listed(e.get("name"), "SPECIES"):
+                    reasons.append(f"protected taxon: {path}: species[{i}] is masked or "
+                                   f"quarantined by the gate")
+                if isinstance(e, dict) and col_listed(e.get("key")):
+                    reasons.append(f"protected taxon: {path}: species[{i}] carries a masked key")
+                if isinstance(e, dict) and col_listed(e.get("legacy_key")):
+                    reasons.append(f"protected taxon: {path}: species[{i}] carries a masked "
+                                   f"legacy key")
 
 
 # ---------- validation ------------------------------------------------------------------------
@@ -493,7 +682,7 @@ def _load_all(staging, files, reasons):
     return docs, gz
 
 
-def validate(staging, gate_args=None):
+def validate(staging, gate_args=None, require_species=False):
     """(reasons, gzip sizes) — an empty reason list means publishable."""
     reasons = []
     files = sorted(os.path.relpath(os.path.join(root, n), staging).replace(os.sep, "/")
@@ -501,7 +690,7 @@ def validate(staging, gate_args=None):
     docs, gz = _load_all(staging, files, reasons)
 
     if "dashboard.json" in files:
-        _occurrence(files, docs, staging, gate_args, reasons)
+        _occurrence(files, docs, staging, gate_args, reasons, require_species=require_species)
     elif "japan-outline.json" in files:
         for rel in files:
             if rel != "japan-outline.json":
@@ -519,23 +708,34 @@ def validate(staging, gate_args=None):
                     reasons.append(f"unsafe field: {rel}: string matches known prose pattern {pat!r}")
                     break
     for rel in files:
-        cap = BUDGETS.get(rel, DETAIL_BUDGET if rel.startswith("areas/") else None)
+        cap = BUDGETS.get(rel, DETAIL_BUDGET if rel.startswith(("areas/", "species/")) else None)
         if cap is not None and gz[rel] > cap * KIB:
             reasons.append(f"over budget: {rel}: {gz[rel]} bytes gzip-9 > {cap} KiB cap")
     return reasons, gz
 
 
-def _occurrence(files, docs, staging, gate_args, reasons):
+def _occurrence(files, docs, staging, gate_args, reasons, require_species=False):
     ix = docs.get("areas/index.json")
     ids = check_index(ix, "areas/index.json", reasons) if isinstance(ix, dict) else {}
+    six = docs.get("species/index.json")
     allowed = {"dashboard.json", "areas/index.json", "japan-outline.json", "mesh-research.json"} \
         | {f"areas/{i}.json" for i in ids}
+    if isinstance(six, dict) and isinstance(six.get("files"), dict):
+        allowed |= {"species/index.json"} | {f"species/{s}.json" for s in six["files"]}
     for rel in files:
         if rel not in allowed:
             reasons.append(f"stray file: {rel} is not part of the publish bundle")
     for aid in ids:
         if f"areas/{aid}.json" not in files:
             reasons.append(f"missing area file: areas/{aid}.json is in the index but not on disk")
+    if "species/index.json" not in files:
+        if require_species:
+            # PR #7 review: a skipped, deleted or misdirected species build must fail
+            # closed in the publish workflow, not silently skip the species checks
+            reasons.append("missing species/index.json: --require-species is set but "
+                           "no species bundles are present")
+    else:
+        check_species(files, docs, staging, reasons, ids)
 
     stamps = set()
     for rel in [r for r in files if r == "dashboard.json" or r == "mesh-research.json"
@@ -608,7 +808,10 @@ def _occurrence(files, docs, staging, gate_args, reasons):
                            f"{sorted(mesh_keys ^ set(ix['cells']))[:5]}")
         digest = bundle_digest(staging)
         for rel, d in docs.items():
-            if rel in allowed and rel != "japan-outline.json" and isinstance(d, dict) \
+            # species/ carries its own digest (check_species); it never joins the
+            # occurrence bundle's, exactly as japan-outline.json does not.
+            if rel in allowed and rel != "japan-outline.json" and not rel.startswith("species/") \
+                    and isinstance(d, dict) \
                     and isinstance(d.get("snapshot"), str) and HEX64.match(d["snapshot"]) \
                     and d["snapshot"] != digest:
                 reasons.append(f"digest mismatch: {rel}: stamped snapshot != recomputed bundle digest")
@@ -645,12 +848,14 @@ def main(argv=None):
     ap.add_argument("--coverage", default="data/reference/redlist_coverage.csv")
     ap.add_argument("--exceptions", default="data/reference/match_exceptions.csv")
     ap.add_argument("--redlist", default="data/raw/redlist/redlist_fungi_jp.json")
+    ap.add_argument("--require-species", action="store_true",
+                    help="fail when species bundles are absent (the publish workflow sets this)")
     ap.add_argument("--col-mask-map", default="data/reference/col_mask_map.csv",
                     help="required input (TASK-018): COL XR mask map; missing blocks validation")
     args = ap.parse_args(argv)
     gate_args = {k: getattr(args, k) for k in ("mask", "coverage", "exceptions", "redlist")}
     gate_args["col_mask"] = args.col_mask_map
-    reasons, gz = validate(args.staging, gate_args)
+    reasons, gz = validate(args.staging, gate_args, require_species=args.require_species)
     if reasons:
         print(f"{args.staging}: NOT publishable — {len(reasons)} reason(s):", file=sys.stderr)
         for r in reasons:
