@@ -54,6 +54,8 @@ def public_species(con, gate):
     gate.install_sql(con)
     return con.execute(f"""select {X['sp_key']}, {X['sp_name']} from jp
                            where {X['sp_key']} is not null and {gate.sql_where("jp")}
+                             and jp.taxonRank in ('SPECIES','VARIETY','SUBSPECIES','FORM')
+                             and species like '% %'   -- PR #7 review: match the bundle builder
                            group by 1,2""").fetchall()
 
 
