@@ -148,13 +148,15 @@ def parse_rows(text):
 
 
 def sanity_check(stats, printed):
-    """Say so instead of shipping a partial list (task brief)."""
+    """Fail closed before anything is written (PR #3 review P1): the 2020 union
+    cannot protect newly listed 2025 taxa a broken parse omits, so a partial
+    list must block, not warn."""
     if not stats["complete"]:
-        print(f"WARNING: layout not fully understood — numbering gaps {stats['gaps']}, "
-              f"unparsed lines {stats['other']}", file=sys.stderr)
+        sys.exit(f"layout not fully understood — numbering gaps {stats['gaps']}, "
+                 f"unparsed lines {stats['other']}; refusing to write a partial list")
     if stats["rows"] < MIN_EXPECTED_ROWS:
-        print(f"WARNING: only {stats['rows']} names parsed — previous editions carried "
-              f"an order of magnitude more; the layout may have changed", file=sys.stderr)
+        sys.exit(f"only {stats['rows']} names parsed (minimum {MIN_EXPECTED_ROWS}); "
+                 f"the layout may have changed; refusing to write a partial list")
     print(f"parsed {stats['rows']} scientific names from {printed}")
 
 

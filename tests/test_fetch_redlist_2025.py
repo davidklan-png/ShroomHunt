@@ -66,6 +66,21 @@ class Parser(unittest.TestCase):
         self.assertEqual(stats["gaps"], [(2, 4), (4, 4)])
         self.assertFalse(stats["complete"])
 
+    def test_incomplete_or_thin_parse_fails_closed(self):
+        # PR #3 review P1: the 2020 union cannot protect newly listed 2025 taxa a
+        # broken parse omits, so sanity_check must block before anything is written.
+        with self.assertRaises(SystemExit):
+            fr.sanity_check({"rows": 6, "gaps": [(2, 4)], "other": [], "complete": False}, "x.pdf")
+        with self.assertRaises(SystemExit):
+            fr.sanity_check({"rows": 6, "gaps": [], "other": ["leftover line"], "complete": False}, "x.pdf")
+        with self.assertRaises(SystemExit):
+            fr.sanity_check({"rows": 3, "gaps": [], "other": [], "complete": True}, "x.pdf")
+        old_min, fr.MIN_EXPECTED_ROWS = fr.MIN_EXPECTED_ROWS, 6
+        try:
+            fr.sanity_check({"rows": 6, "gaps": [], "other": [], "complete": True}, "x.pdf")  # passes quietly
+        finally:
+            fr.MIN_EXPECTED_ROWS = old_min
+
     def test_parsed_csv_shape(self):
         rows, _ = fr.parse_rows(TEXT)
         path = os.path.join(tempfile.mkdtemp(), "redlist_2025_parsed.csv")

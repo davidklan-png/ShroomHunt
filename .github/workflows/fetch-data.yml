@@ -57,7 +57,9 @@ jobs:
       - name: Japan fungal Red List
         run: |
           command -v pdftotext >/dev/null 2>&1 || sudo apt-get install -y poppler-utils
+          pip install duckdb==2.0.1                  # fetch_redlist_2025 loads the crosswalk (PR #3 review P1)
           python3 pipeline/fetch_redlist.py          # 2020 download: provenance + union fallback input
+          python3 pipeline/fetch_col_mapping.py      # COL crosswalk into data/raw/col/ for the 2025 matcher
           python3 pipeline/fetch_redlist_2025.py     # 2025 PDF: the masking input (TASK-020, D12)
 
       - name: Mushroom Observer
