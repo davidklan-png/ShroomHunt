@@ -210,6 +210,21 @@ def load_gate(mask="data/reference/taxon_mask.csv", coverage="data/reference/red
                     if (r.get("value") or "").strip()]
         if not col_rows:
             raise PublicTaxaError(f"col_mask_map has no rows: {col_mask}")
+        # Coverage, not mere presence (PR #2 review P1): an old map generated before a
+        # mask/Red List review must not pass — a newly masked taxon could then publish
+        # under a synonym legacy key. Checked pre-merge, against the input-derived gate
+        # only; extra rows (an entry since unmasked) over-mask, which is fail-safe.
+        expected = {("key", k.strip()) for k in g.keys} | {
+            ("name", n) for n in g.masked_names | g.ambiguous_names}
+        have = {((r.get("source") or "").strip(),
+                 (r.get("value") or "").strip().lower()) for r in col_rows}
+        missing = expected - have
+        if missing:
+            sample = ", ".join(f"{k} {v}" for k, v in sorted(missing)[:8])
+            raise PublicTaxaError(
+                f"col_mask_map is stale: {len(missing)} gate entries have no map row "
+                f"(regenerate with pipeline/col_xr.py --mask-map): {sample}"
+                + (" ..." if len(missing) > 8 else ""))
         for r in col_rows:
             k = (r.get("col_key") or "").strip()
             if k:

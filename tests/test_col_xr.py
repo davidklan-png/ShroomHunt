@@ -95,6 +95,18 @@ class LoadAndApply(unittest.TestCase):
                                 ("9999", None, None, None),                          # unmapped stays null
                                 (None, None, None, None)])
 
+    def test_apply_keys_the_eastasia_table_too(self):
+        # PR #2 review P1: build_db used to apply the crosswalk before creating ea,
+        # leaving East Asia rows on legacy keys — mapped species reappeared as false
+        # "possible" candidates. apply must cover every speciesKey table it finds.
+        self.con.execute("create table ea(speciesKey varchar, species varchar, family varchar)")
+        self.con.executemany("insert into ea values (?,?,?)",
+                             [("7001", "Matsutakus fictus", "Fictaceae"), ("9999", "Neminem novi", "Incertae")])
+        col_xr.load_map(self.con, self.tsv)
+        col_xr.apply(self.con)
+        self.assertEqual(self.con.execute(
+            "select col_key from ea where speciesKey = '7001'").fetchone(), ("CRL3",))
+
     def test_exprs_fall_back_to_backbone_columns(self):
         legacy = {"speciesKey", "species", "family"}
         keyed = legacy | {"col_key", "col_name", "col_family"}
@@ -197,6 +209,19 @@ class GateColMasking(unittest.TestCase):
         open(empty, "w").write("source,value,col_key,col_accepted_name\n")
         with self.assertRaisesRegex(PublicTaxaError, "col_mask_map"):
             self.gate(col_mask=empty)
+
+    def test_stale_col_mask_map_missing_a_gate_entry_blocks(self):
+        # PR #2 review P1: a map generated before a mask/Red List review must not
+        # pass on mere presence — the unlisted entry could publish under a synonym
+        # legacy key. Every gate key and name needs its row.
+        with open(os.path.join(FIX, "col_mask_map.csv")) as f:
+            lines = f.read().splitlines()
+        drop = next(ln for ln in lines if ln.startswith("name,rareus japonicus,"))
+        stale = os.path.join(self.tmp, "stale_map.csv")
+        with open(stale, "w") as f:
+            f.write("\n".join(ln for ln in lines if ln != drop) + "\n")
+        with self.assertRaisesRegex(PublicTaxaError, "stale"):
+            self.gate(col_mask=stale)
 
     def test_sql_where_masks_col_keys(self):
         gate = self.gate(col_mask=os.path.join(FIX, "col_mask_map.csv"))

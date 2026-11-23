@@ -25,10 +25,6 @@ r = lambda f: f"read_csv('{f}', delim='\\t', header=true, quote='', all_varchar=
 for t, f in (("jp", a.japan), ("nb", a.neighbours), ("mo", a.mo)):
     c.execute(f"create or replace table {t} as select * from {r(f)}")
     print(t, c.execute(f"select count(*) from {t}").fetchone()[0], "rows")
-if a.col_map:                      # TASK-018: COL XR re-keying of every speciesKey table
-    from col_xr import apply, load_map
-    load_map(c, a.col_map)
-    apply(c)
 if a.japan_dwca:
     # habitat text, host / associated plants and elevation from the DwC-A, plus the
     # source-precision fields build_areas.py needs for spatial eligibility (§7/TASK-005):
@@ -63,3 +59,7 @@ if a.eastasia:
         from {r(a.eastasia)} where speciesKey is not null and species is not null
         group by all""")
     print("ea", c.execute("select count(*), sum(n), count(distinct species) from ea").fetchone(), "(cells, records, species)")
+if a.col_map:                      # TASK-018: COL XR re-keying; last, so ea (created above)
+    from col_xr import apply, load_map   # exists too — review PR #2 P1: applying before the
+    load_map(c, a.col_map)               # eastasia block left ea on legacy keys
+    apply(c)
