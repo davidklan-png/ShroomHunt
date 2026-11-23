@@ -42,6 +42,10 @@ of the accepted taxon, null falling back to the backbone. Species rows and candi
 the COL key as the additive "c" field (null when unmapped). A DB that carries COL keys
 requires data/reference/col_mask_map.csv (fail closed, pipeline/col_xr.py).
 
+Legacy backbone key (TASK-021): species and candidate rows also carry "lk" — the legacy
+speciesKey as a string — set ONLY when the row has no COL key: a lumped species with a "c"
+fires the primary /taxon/ link and needs no fallback, so merged rows keep lk null.
+
 Usage: python3 pipeline/build_areas.py --out data/processed/areas  [--db data/shroomhunt.duckdb]
        [--redlist data/raw/redlist/redlist_fungi_jp.json]
 Tables used: jp (GBIF SIMPLE_CSV), optional jp_extra (gbifID, habitat and the DwC-A precision notes),
@@ -299,7 +303,10 @@ def main():
             # centre to the nearest source centroid (§6); s stays the 1–100 within-kind priority.
             out += [{"n": sp, "f": fam, "k": kd, "s": max(1, round(100 * sc / mx)),
                      "d": min(BAND_CAP, BAND_KM * int(near[0] // BAND_KM)), "w": near[1][0],
-                     "wj": near[1][1], "m": months, "c": colk or None}
+                     "wj": near[1][1], "m": months, "c": colk or None,
+                     # TASK-021: with no COL key, spk IS 'L' + speciesKey (col_xr sp_key),
+                     # so the legacy fallback key is already carried — strip the marker
+                     "lk": spk[1:] if not colk and isinstance(spk, str) and spk.startswith("L") else None}
                     for spk, (sc, fam, near, months, kd, sp, colk) in top]
         return out
 
@@ -347,7 +354,10 @@ def main():
                 continue
             # TASK-018: keyed by the COL identity — lumped backbone synonyms share spk and
             # merge here; n is the COL accepted name, c the COL key (null when unmapped).
-            s = by_sp.setdefault(spk, {"n": sp, "c": colk or None, "f": fam or "", "k": kd, "r": 0,
+            # TASK-021: lk is the legacy speciesKey, set only when c is null.
+            s = by_sp.setdefault(spk, {"n": sp, "c": colk or None,
+                                       "lk": str(key) if not colk and key is not None else None,
+                                       "f": fam or "", "k": kd, "r": 0,
                                        "m": [0] * 12, "sq": set(), "y": [9999, 0], "e": Counter()})
             s["r"] += 1
             if cell is not None:
@@ -360,8 +370,8 @@ def main():
             # §6 RecordedRow (TASK-005): habitat prose (h), localities (l), elevation (el) and the
             # by-name count (nm) are withdrawn — empty values; the site renders the em dash.
             # n/f/k/r/m/sq/y/e keep their meaning. sq/m come from eligible whole cells only.
-            # c is the additive COL XR key (TASK-018).
-            species.append({"n": s["n"], "c": s["c"], "f": s["f"], "k": s["k"], "r": s["r"], "m": s["m"],
+            # c is the additive COL XR key (TASK-018); lk the additive legacy key (TASK-021).
+            species.append({"n": s["n"], "c": s["c"], "lk": s["lk"], "f": s["f"], "k": s["k"], "r": s["r"], "m": s["m"],
                             "sq": len(s["sq"]), "y": s["y"] if s["y"][1] else None,
                             "e": dict(sorted(s["e"].items(), key=lambda kv: (-kv[1], kv[0]))),
                             "h": [], "l": [], "nm": 0, "el": None})
@@ -400,9 +410,13 @@ def main():
             for x in built[mid]["species"]:
                 # complete cell unions (§6): group rows merge the members' whole-cell sq and
                 # eligible months; withdrawn fields (h/l/el/nm) stay empty placeholders.
-                t = sp.setdefault(x["n"], {"n": x["n"], "c": x["c"], "f": x["f"], "k": x["k"], "r": 0,
-                                          "m": [0] * 12, "sq": 0, "y": None,
+                t = sp.setdefault(x["n"], {"n": x["n"], "c": x["c"], "lk": x["lk"], "f": x["f"],
+                                          "k": x["k"], "r": 0, "m": [0] * 12, "sq": 0, "y": None,
                                           "e": Counter(), "h": [], "l": [], "nm": 0, "i": [], "el": None})
+                for kf in ("c", "lk"):
+                    # PR #4 review: member rows merged by name that disagree on a taxon key
+                    # are homonyms — link nowhere rather than to one member's arbitrary taxon
+                    if x.get(kf) != t.get(kf): t[kf] = None
                 t["r"] += x["r"]; t["sq"] += x["sq"]; t["i"].append(mid)
                 t["m"] = [p + q for p, q in zip(t["m"], x["m"])]
                 if x["y"]: t["y"] = [min(t["y"][0], x["y"][0]), max(t["y"][1], x["y"][1])] if t["y"] else list(x["y"])

@@ -185,6 +185,16 @@ class MergedSpecies(unittest.TestCase):
         self.assertEqual(self.out["leads"][0][5], "CRL14")      # appended COL key element
         self.assertEqual(self.out["lead_totals"]["candidates"], 1)
 
+    def test_legacy_key_only_on_rows_without_a_col_key(self):
+        # TASK-021: lk rides only keyless-unmapped rows — the lumped CRL7 row fires the
+        # primary /taxon/ link and keeps lk null; unmapped 9999 keeps its legacy key.
+        # The COL-keyed lead appends a null 7th element, never a legacy key.
+        merged, unmapped = self.area["species"]
+        self.assertEqual((merged["n"], merged["c"], merged["lk"]), ("Candidus merus", "CRL7", None))
+        self.assertEqual((unmapped["n"], unmapped["c"], unmapped["lk"]), ("Neminem novi", None, "9999"))
+        self.assertEqual(len(self.out["leads"][0]), 7)
+        self.assertIsNone(self.out["leads"][0][6])
+
 
 class GateColMasking(unittest.TestCase):
     def setUp(self):

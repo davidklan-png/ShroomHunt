@@ -82,8 +82,10 @@ class CrossDatasetDeduplication(unittest.TestCase):
         # mesh: the one eligible cell holds the four deduped records, one species
         self.assertEqual(d["mesh"], [[*cell_center(313, 1021), 4, 1]])
         # leads: the neighbour SQL read the deduped jp — Leadus candidus's only jp record
-        # was a dropped duplicate half, so it counts as unrecorded in Japan
-        self.assertEqual(d["leads"], [["Leadus candidus", "Fictaceae", 77, 1, "genus unrecorded in Japan", None]])
+        # was a dropped duplicate half, so it counts as unrecorded in Japan. TASK-021:
+        # the 7th element is the legacy backbone key (no COL key on this legacy DB).
+        self.assertEqual(d["leads"], [["Leadus candidus", "Fictaceae", 77, 1,
+                                       "genus unrecorded in Japan", None, "5010"]])
         self.assertEqual(d["lead_totals"], {"candidates": 1, "with_mo": 1,
                                             "with_unresolved_jp_genus": 0})
 
