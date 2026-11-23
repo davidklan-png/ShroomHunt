@@ -258,6 +258,35 @@ class SanitizedAreaDetail(unittest.TestCase):
         self.assertIn("315:1021", cells)                # Uncerus (uncertainty 25000) is spatial when the column is absent
         self.assertEqual(cells["315:1021"], "okisle")
 
+    def test_group_rows_drop_taxon_keys_member_rows_disagree_on(self):
+        # PR #4 review: two COL-unmapped taxa sharing a display name merge into one group
+        # row; it must not inherit one member's legacy key for both. Same key on both
+        # islands is a true merge and keeps it.
+        db = os.path.join(self.tmp, "homonyms.duckdb")
+        c = duckdb.connect(db)
+        c.execute(f"create table jp({JP_COLUMNS})")
+        rows = [
+            ("21", "6001", "Homonymus dubius", "Homonymus", "Fictaceae", "SPECIES", "HUMAN_OBSERVATION",
+             "Agaricomycetes", "Basidiomycota", "26.1", "127.7", "3", "2019", None, "Okinawa", "dx", None, None, None),
+            ("22", "6002", "Homonymus dubius", "Homonymus", "Fictaceae", "SPECIES", "HUMAN_OBSERVATION",
+             "Agaricomycetes", "Basidiomycota", "26.7", "127.75", "5", "2021", None, "Okinawa", "dx", None, None, None),
+            ("23", "6003", "Stabilis fixus", "Stabilis", "Fictaceae", "SPECIES", "HUMAN_OBSERVATION",
+             "Agaricomycetes", "Basidiomycota", "26.1", "127.7", "7", "2020", None, "Okinawa", "dx", None, None, None),
+            ("24", "6003", "Stabilis fixus", "Stabilis", "Fictaceae", "SPECIES", "HUMAN_OBSERVATION",
+             "Agaricomycetes", "Basidiomycota", "26.7", "127.75", "8", "2022", None, "Okinawa", "dx", None, None, None),
+        ]
+        c.executemany("insert into jp values (" + ",".join(["?"] * 15) + ")",
+                      [tuple(r[i] for i in range(1, 16)) for r in rows])
+        c.execute("create table ea(speciesKey varchar, species varchar, family varchar, "
+                  "lat double, lon double, month int, n int)")
+        c.close()
+        group = json.loads(read(os.path.join(build(db, self.islands, self.refs), "g-oki-islands.json")))
+        hom = next(s for s in group["species"] if s["n"] == "Homonymus dubius")
+        self.assertIsNone(hom["lk"])                    # disagreeing keys link nowhere
+        self.assertEqual(hom["i"], ["okisle", "lilisle"])
+        sta = next(s for s in group["species"] if s["n"] == "Stabilis fixus")
+        self.assertEqual(sta["lk"], "6003")             # same key on both islands keeps it
+
 
 DWCA_FULL = ("gbifID\thabitat\tassociatedTaxa\televation\tdataGeneralizations\tinformationWithheld\n"
              "1\ton dead Quercus wood\tQuercus sp.\t500\t\t\n"

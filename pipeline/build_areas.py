@@ -378,6 +378,10 @@ def main():
                 t = sp.setdefault(x["n"], {"n": x["n"], "c": x["c"], "lk": x["lk"], "f": x["f"],
                                           "k": x["k"], "r": 0, "m": [0] * 12, "sq": 0, "y": None,
                                           "e": Counter(), "h": [], "l": [], "nm": 0, "i": [], "el": None})
+                for kf in ("c", "lk"):
+                    # PR #4 review: member rows merged by name that disagree on a taxon key
+                    # are homonyms — link nowhere rather than to one member's arbitrary taxon
+                    if x.get(kf) != t.get(kf): t[kf] = None
                 t["r"] += x["r"]; t["sq"] += x["sq"]; t["i"].append(mid)
                 t["m"] = [p + q for p, q in zip(t["m"], x["m"])]
                 if x["y"]: t["y"] = [min(t["y"][0], x["y"][0]), max(t["y"][1], x["y"][1])] if t["y"] else list(x["y"])
