@@ -222,6 +222,26 @@ class PublishContract(unittest.TestCase):
             write_json(os.path.join(p, "mesh-research.json"), research)
         self.reject(put, "genera[1]", restamp=True)
 
+    def test_id_depth_rejects_duplicate_or_missing_buckets(self):
+        # PR #5 review: [species, species, genus] with a correct sum must not publish
+        def put(d):
+            s, g, h = (n for _, n in d["id_depth"])
+            d["id_depth"] = [["species", s], ["species", 0], ["genus", g + h]]
+        self.reject(lambda p: self.edit(p, "areas/okisle.json", put),
+                    "species/genus/higher triple", restamp=True)
+
+    def test_group_aggregates_reject_when_they_contradict_their_members(self):
+        # PR #5 review: moving counts between bases keeps every total but contradicts
+        # the leaf areas — the inspector would show a chart no island supports
+        def put(d):
+            ev = {k: n for k, n in d["evidence"]}
+            for k in list(ev):
+                if k != "HUMAN_OBSERVATION":
+                    ev["HUMAN_OBSERVATION"] = ev.get("HUMAN_OBSERVATION", 0) + ev.pop(k)
+            d["evidence"] = sorted(ev.items(), key=lambda kv: -kv[1])
+        self.reject(lambda p: self.edit(p, "areas/g-okinawa-prefecture.json", put),
+                    "disagrees with the sum of its members", restamp=True)
+
     # ---------- the reject matrix (one deliberate fault per variant) ---------------------------
 
     def test_unknown_schema_version_rejects(self):
@@ -334,6 +354,61 @@ class PublishContract(unittest.TestCase):
                 gid = next(r["id"] for r in json.load(f)["areas"] if r["kind"] == "group")
             self.edit(p, f"areas/{gid}.json", lambda d: d.update(dominant_source=["Survey", 0.5]))
         self.reject(on_group, "dominant_source", restamp=True)
+
+    def test_area_aggregates_stay_optional_bundle_wide(self):
+        # TASK-021: additive trio, schema_version stays 1 — a bundle from the
+        # pre-TASK-021 builder (no area carrying them) remains publishable
+        path = self.copy()
+        for rel in os.listdir(os.path.join(path, "areas")):
+            if rel != "index.json":
+                self.edit(path, f"areas/{rel}",
+                          lambda d: [d.pop(k) for k in ("evidence", "id_depth", "decades")])
+        r = run_builder("snapshot.py", path)
+        assert r.returncode == 0, r.stdout + r.stderr
+        r = self.validate(path)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_area_aggregates_partial_trio_or_partial_bundle_reject(self):
+        def drop_decades(p):
+            self.edit(p, "areas/okisle.json", lambda d: d.pop("decades"))
+        self.reject(drop_decades, "key set", restamp=True)
+        def strip_one_area(p):
+            self.edit(p, "areas/lilisle.json",
+                      lambda d: [d.pop(k) for k in ("evidence", "id_depth", "decades")])
+        self.reject(strip_one_area, "all or none", restamp=True)
+
+    def test_area_aggregate_shapes_reject(self):
+        for bad in ([[7, 1]],                                        # basis is neither string nor null
+                    [["HUMAN_OBSERVATION"]],                         # wrong arity
+                    [["HUMAN_OBSERVATION", "3"]],                    # count is not a UInt
+                    [["HUMAN_OBSERVATION", -1]],                     # negative count
+                    [["HUMAN_OBSERVATION", 1], "row"]):              # a row is not a pair
+            def put(p, bad=bad):
+                self.edit(p, "areas/okisle.json", lambda d: d.update(evidence=bad))
+            self.reject(put, "evidence[", restamp=True)
+        for field, bad, needle in (("id_depth", [["family", 1]], "id_depth[0]"),
+                                   ("decades", [["1990s", 1]], "decades[0]"),
+                                   ("decades", [[1990.5, 1]], "decades[0]")):
+            def put(p, field=field, bad=bad):
+                self.edit(p, "areas/okisle.json", lambda d: d.update({field: bad}))
+            self.reject(put, needle, restamp=True)
+
+    def test_area_aggregate_wrong_type_rejects(self):
+        self.reject(lambda p: self.edit(p, "areas/okisle.json", lambda d: d.update(evidence={})),
+                    "wrong type", restamp=True)
+
+    def test_area_aggregate_sum_mismatches_reject(self):
+        def bump_evidence(p):
+            self.edit(p, "areas/okisle.json",
+                      lambda d: d["evidence"][0].__setitem__(1, d["evidence"][0][1] + 1))
+        self.reject(bump_evidence, "evidence does not sum to totals.records", restamp=True)
+        def bump_depth(p):
+            self.edit(p, "areas/okisle.json",
+                      lambda d: d["id_depth"][0].__setitem__(1, d["id_depth"][0][1] + 1))
+        self.reject(bump_depth, "id_depth does not sum to totals.records", restamp=True)
+        def pad_decades(p):
+            self.edit(p, "areas/okisle.json", lambda d: d["decades"].append([2030, 5]))
+        self.reject(pad_decades, "decades sums above totals.records", restamp=True)
 
     def test_over_budget_file_rejects(self):
         def pad(p):

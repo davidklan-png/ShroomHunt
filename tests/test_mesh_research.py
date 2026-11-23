@@ -602,6 +602,19 @@ class EndToEndBundle(unittest.TestCase):
         self.assertEqual(self.research["genera"],
                          [["Russula", ["okisle"], ["brittlegills", "ベニタケ属"]]])
 
+    def test_area_overview_aggregates_sum_to_totals(self):
+        # TASK-021: every area file on the full publish path carries the three Overview
+        # aggregates; evidence and id_depth partition totals.records exactly
+        for rel in os.listdir(os.path.join(self.staging, "areas")):
+            if rel == "index.json": continue
+            with open(os.path.join(self.staging, "areas", rel)) as f:
+                area = json.load(f)
+            n = area["totals"]["records"]
+            self.assertEqual(sum(r[1] for r in area["evidence"]), n, rel)
+            self.assertEqual([r[0] for r in area["id_depth"]], ["species", "genus", "higher"], rel)
+            self.assertEqual(sum(r[1] for r in area["id_depth"]), n, rel)
+            self.assertLessEqual(sum(r[1] for r in area["decades"]), n, rel)
+
     def test_workflow_runs_research_before_the_stamp_outside_geography_only(self):
         with open(os.path.join(REPO, ".github", "workflows", "publish-dashboard.yml")) as f:
             text = f.read()

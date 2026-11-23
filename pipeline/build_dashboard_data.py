@@ -28,6 +28,7 @@ from eligibility import precision_selection, spatially_eligible  # noqa: E402
 from snapshot import write_json  # noqa: E402
 from shared import specimen_key  # noqa: E402
 from col_xr import ensure, exprs, keyed  # noqa: E402
+from taxonomy import id_depth_sql  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--db", default="data/shroomhunt.duckdb")
@@ -94,8 +95,7 @@ totals["sensitive_records"] = one(f"select count(*) from jp where {not_public}")
 totals["redlist_names"] = gate.redlist_names
 
 evidence = rows("select basisOfRecord, count(*) from jp group by 1 order by 2 desc, 1")
-id_depth = rows("""select case when taxonRank in ('SPECIES','VARIETY','SUBSPECIES','FORM') then 'species'
-                               when taxonRank='GENUS' then 'genus' else 'higher' end d, count(*) from jp group by 1 order by 2 desc, 1""")
+id_depth = rows(f"""select {id_depth_sql()} d, count(*) from jp group by 1 order by 2 desc, 1""")
 phyla = rows(f"""select coalesce({X['phylum']},'Unknown'), count(*), count(distinct {X['sp_key']}) from jp
                  group by 1 order by 2 desc, 1 limit 8""")
 decades = rows("""select (try_cast(year as int)//10)*10 as "dec", count(*) from jp

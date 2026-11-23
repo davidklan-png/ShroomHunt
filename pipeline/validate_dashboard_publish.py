@@ -22,10 +22,16 @@ Checks:
               [dataset title, share] pair (share 0.30-1.0, TASK-012); a group
               file never does (groups merge members, the builder emits it
               per sampling area only);
-              additive legacy-key fields (TASK-021): species/candidate rows may
-              carry a nullable "lk", leads a 7th legacy-key element — never
-              non-null on a row whose "c"/col_key is set (a COL-keyed row fires
-              the primary /taxon/ link and needs no fallback);
+              every area file (island, tile or group) may carry the three
+              additive Overview aggregates, as an all-or-nothing trio uniform
+              across the bundle: evidence [[basisOfRecord|null, n]] over the
+              area's public records, id_depth the fixed [species, genus,
+              higher] bucket triple, decades [[decade, n]] with year-less
+              records left out — evidence and id_depth must each sum to
+              totals.records, decades at most; area species/candidate rows may
+              also carry a nullable "lk" and leads a 7th legacy-key element —
+              never non-null on a row whose "c"/col_key is set (a COL-keyed row
+              fires the primary /taxon/ link and needs no fallback);
   snapshot    a 64-hex lowercase digest, identical in every occurrence file
               and equal to the recomputed bundle digest (pipeline/snapshot.py);
   integrity   dashboard mesh key set == index cells keys; index area ids ==
@@ -59,6 +65,7 @@ DETAIL_BUDGET = 64
 KINDS = {"m", "l", "o"}
 AREA_KINDS = {"island", "tile", "group"}
 RANKS = {"species", "genus", "higher"}
+AGG_KEYS = {"evidence", "id_depth", "decades"}   # TASK-021: the Overview aggregate trio
 BANDS = {0, 50, 100, 150, 200, 250}
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -230,7 +237,9 @@ def check_area_file(f, path, reasons, ids):
     keys = f"shape: {path}"
     kind = f.get("kind") if isinstance(f, dict) else None
     want = GROUP_FILE if kind == "group" else (AREA_FILE if kind in AREA_KINDS else None)
-    if want is None or not (set(f) == want or set(f) == want | {"dominant_source"}):
+    # TASK-021: the Overview aggregates ride along as an additive trio (all three
+    # keys or none), beside dominant_source's single optional key.
+    if want is None or not want <= set(f) or set(f) - want - {"dominant_source"} not in (set(), AGG_KEYS):
         reasons.append(f"{keys}: key set != §6 AreaFile for kind {kind!r}")
         return
     if not all(isinstance(f[k], str) and f[k] for k in ("id", "name_en", "name_ja")) \
@@ -245,7 +254,8 @@ def check_area_file(f, path, reasons, ids):
                        f"a group file never carries one")
         return
     if not isinstance(f["species"], list) or not isinstance(f["possible"], list) \
-            or not isinstance(f["totals"], dict) or (kind == "group" and not isinstance(f["members"], list)):
+            or not isinstance(f["totals"], dict) or (kind == "group" and not isinstance(f["members"], list)) \
+            or not all(isinstance(f[k], list) for k in AGG_KEYS & set(f)):
         reasons.append(f"{keys}: a §6 list/object field has the wrong type")
         return
     if kind == "group":
@@ -261,6 +271,31 @@ def check_area_file(f, path, reasons, ids):
         reasons.append(f"{keys}: totals is not the five §6 UInt fields")
     elif t["by_name"] != 0:
         reasons.append(f"unsafe field: {path}: totals.by_name must be 0 (name-only counts are withdrawn)")
+    if AGG_KEYS <= set(f):                              # TASK-021: the Overview aggregates —
+        n0 = len(reasons)                               # shapes first, then the record-sum ties
+        for i, row in enumerate(f["evidence"]):
+            if not (isinstance(row, list) and len(row) == 2
+                    and (row[0] is None or isinstance(row[0], str)) and is_uint(row[1])):
+                reasons.append(f"{keys}: evidence[{i}] is not a [basisOfRecord|null, UInt] pair")
+        for i, row in enumerate(f["id_depth"]):
+            if not (isinstance(row, list) and len(row) == 2 and row[0] in RANKS and is_uint(row[1])):
+                reasons.append(f"{keys}: id_depth[{i}] is not a [rank, UInt] pair over {sorted(RANKS)}")
+        # PR #5 review: exactly the species/genus/higher triple, in order — duplicate or
+        # missing buckets that still sum right must not publish
+        if len(reasons) == n0 and [r[0] for r in f["id_depth"]] != ["species", "genus", "higher"]:
+            reasons.append(f"{keys}: id_depth must be exactly the species/genus/higher triple, in order")
+        for i, row in enumerate(f["decades"]):
+            if not (isinstance(row, list) and len(row) == 2 and is_uint(row[0]) and is_uint(row[1])):
+                reasons.append(f"{keys}: decades[{i}] is not a [decade, UInt] pair")
+        if len(reasons) == n0 and isinstance(t, dict) and is_uint(t.get("records")):
+            # evidence and id_depth partition the same record set totals.records counts;
+            # decades misses at most the year-less records
+            for field in ("evidence", "id_depth"):
+                if sum(r[1] for r in f[field]) != t["records"]:
+                    reasons.append(f"integrity: {path}: {field} does not sum to totals.records "
+                                   f"({t['records']})")
+            if sum(r[1] for r in f["decades"]) > t["records"]:
+                reasons.append(f"integrity: {path}: decades sums above totals.records ({t['records']})")
     if not is_bins12(f["months"]):
         reasons.append(f"{keys}: months is not a Bins12")
     if "dominant_source" in f:                              # TASK-012: optional sampling-bias note
@@ -524,6 +559,32 @@ def _occurrence(files, docs, staging, gate_args, reasons):
             check_research(d, rel, reasons, ids)
         else:
             check_area_file(d, rel, reasons, ids)
+    # TASK-021: the Overview aggregates are additive per file but uniform across the
+    # bundle — the area inspector reads them for every area or for none.
+    detail = [r for r in files if r.startswith("areas/") and r.endswith(".json")
+              and r != "areas/index.json"]
+    carrying = [r for r in detail if isinstance(docs.get(r), dict) and AGG_KEYS <= set(docs[r])]
+    if carrying and len(carrying) != len(detail):
+        reasons.append(f"integrity: TASK-021 aggregates on {len(carrying)} of {len(detail)} area files — "
+                       f"all or none (missing from {sorted(set(detail) - set(carrying))[:3]})")
+    # PR #5 review: a group's aggregates are defined as the sum of its members' published
+    # arrays — restamped counts that contradict the leaf areas must not publish
+    for r in carrying:
+        d = docs[r]
+        members = d.get("members") if isinstance(d, dict) else None
+        if not isinstance(members, list) or not members:
+            continue
+        mdocs = [docs.get(f"areas/{m}.json") for m in members]
+        if not all(isinstance(md, dict) and AGG_KEYS <= set(md) for md in mdocs):
+            continue        # a member without the trio fails the uniformity check above
+        for field in ("evidence", "id_depth", "decades"):
+            merged = {}
+            for md in mdocs:
+                for row in md[field]:
+                    if isinstance(row, list) and len(row) == 2 and isinstance(row[1], int):
+                        merged[row[0]] = merged.get(row[0], 0) + row[1]   # malformed rows already
+            if dict(d[field]) != merged:                                  # rejected by the shape check
+                reasons.append(f"integrity: {r}: {field} disagrees with the sum of its members' arrays")
     if len(stamps) > 1:
         reasons.append("digest mismatch: occurrence files carry more than one snapshot value")
 
