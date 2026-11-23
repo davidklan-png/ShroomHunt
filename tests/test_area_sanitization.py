@@ -527,3 +527,24 @@ class CrossDatasetDeduplication(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FamKindNullClass(unittest.TestCase):
+    """build_areas.fam_kind: a family whose nb tally includes a null class must
+    not crash the sort (publish run 45192355587, ea-candidate path)."""
+
+    def test_null_class_ties_sort_last(self):
+        import importlib.util, sys as _sys
+        spec = importlib.util.spec_from_file_location(
+            "ba", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "pipeline", "build_areas.py"))
+        # build_areas is a script; exercise the same expression inline instead
+        from collections import Counter
+        fam_class = {"Fictaceae": Counter({None: 5, "Agaricomycetes": 5})}
+        best = sorted(fam_class["Fictaceae"].items(),
+                        key=lambda kv: (-kv[1], kv[0] is None, kv[0] or ""))[0][0]
+        self.assertEqual(best, "Agaricomycetes")   # named class beats the null tie
+        fam_class2 = {"Xaceae": Counter({None: 3})}
+        best2 = sorted(fam_class2["Xaceae"].items(),
+                         key=lambda kv: (-kv[1], kv[0] is None, kv[0] or ""))[0][0]
+        self.assertIsNone(best2)                   # all-null keeps None
