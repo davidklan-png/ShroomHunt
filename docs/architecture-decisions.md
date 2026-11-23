@@ -102,3 +102,37 @@ output is keyed on COL XR (spec `docs/species-pages-spec.md` §0b, TASK-018):
   mask name/alias to its COL id. A build whose tables carry COL keys — and every
   `validate_dashboard_publish.py` run — refuses to proceed without it; generation raises
   when any entry matches no COL accepted taxon.
+
+### D12. Masking input: the 2025 Red List (Decided 2026-11-23)
+The location-masking list moves from the 2020 GBIF checklist (10.15468/kmv4xm)
+to the Ministry of the Environment **5th Red List for fungi** (March 2025),
+per spec §0a (TASK-020). Species-level masking only, fail-closed, no genus
+masking (unchanged, D6):
+- **Source**: https://www.env.go.jp/nature/kisho/5th-rl-2025-book/05-5thredlist-fungi.pdf
+  (fetched by `pipeline/fetch_redlist_2025.py` with a Last-Modified sidecar, like
+  `fetch_col_mapping.py`; parsed from `pdftotext -layout` output — poppler-utils,
+  never a Python dependency — into the reviewed
+  `data/reference/redlist_2025_parsed.csv`). The companion Red Data Book
+  (10-5threddatabook-fungi.pdf) is CC BY-NC-ND 4.0 (spec §2); we extract names and categories
+  (facts) and link, never copy its text.
+- **Matching**: the COL crosswalk first — `lower(gbif_name)` or
+  `lower(col_accepted_name)` equal to the name, several accepted taxa → AMBIGUOUS —
+  then the live GBIF backbone species/match service (kingdom=Fungi), the returned
+  key mapped through the crosswalk; still nothing → matchType NONE with a null
+  speciesKey (the NAME still masks; only the key is missing).
+- **Transition rule** (spec: keep 2020 as a superset while that is safer): the
+  2020 download is archived as `data/raw/redlist/redlist_fungi_jp_2020.json`
+  (`pipeline/fetch_redlist.py` stays its regenerator and still runs first in
+  `fetch-data.yml`). When every 2025 name matched (speciesKey or AMBIGUOUS),
+  `redlist_fungi_jp.json` is pure 2025; otherwise it is the UNION of both lists —
+  an unmatched 2025 name keeps any 2020 key, and 2020-only names stay listed, so
+  nothing un-masks by accident. First switch (2026-11-23): one unmatched name →
+  union, 195 names.
+- **Regeneration flow**: `fetch_redlist_2025.py` (download → parse → match →
+  pure/union JSONs → coverage row appended to `redlist_coverage.csv` for review →
+  private diff `data/raw/redlist/redlist_2025_diff.md`, gitignored — per-species
+  names stay out of the repo) → `col_xr.py emit_mask_map` regenerates
+  `col_mask_map.csv` against the new gate → `col_resolve_gaps.py` resolves new
+  misses into `col_mask_overrides.csv`; rows gone stale (entries the 2025 list
+  dropped, or legacy keys the 2025 matcher re-picked) are deleted — emit raises
+  on them by design.
