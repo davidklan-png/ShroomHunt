@@ -269,6 +269,8 @@ def main(argv=None):
     for spk, e in entries.items():
         genera.setdefault(genus_of[spk], []).append(e)
     files = {}
+    aliases = {}   # display-name genus token -> file slug (COL renames)
+    all_slugs = {slugify(g) for g in genera}   # PR #11 review: alias keys must not collide
     for genus in sorted(genera):
         slug = slugify(genus)
         doc = {"schema_version": 1, "genus": genus,
@@ -281,6 +283,15 @@ def main(argv=None):
                 fh.write(raw)
         files[slug] = {"sha256": hashlib.sha256(raw).hexdigest(),
                        "species": len(doc["species"]), "bytes": len(raw)}
+        for e in genera[genus]:
+            # PR #65 review: a COL rename keeps the old genus token in the display
+            # name while the file lives under the accepted genus — alias the token.
+            # PR #11 review: a real genus with that slug outranks the alias (the
+            # validator rejects collisions); the renamed row then degrades to the
+            # plain link only if its name misses in that genus's file too.
+            token = slugify(e["name"].split(" ")[0])
+            if token and token != slug and token not in aliases and token not in all_slugs:
+                aliases[token] = slug
     for name in (os.listdir(a.out) if os.path.isdir(a.out) else []):  # lost every species
         if name.endswith(".json") and name[:-5] not in files \
                 and name not in ("index.json", "summary.json"):
@@ -327,7 +338,7 @@ def main(argv=None):
     index = {"schema_version": 1, "snapshot": digest.hexdigest(),
              "generated": time.strftime("%Y-%m-%d"), "genera": len(files),
              "species": sum(f["species"] for f in files.values()), "files": files,
-             "summary_sha256": hashlib.sha256(sraw).hexdigest()}
+             "aliases": aliases, "summary_sha256": hashlib.sha256(sraw).hexdigest()}
     os.makedirs(a.out, exist_ok=True)
     with open(os.path.join(a.out, "index.json"), "w", newline="\n", encoding="utf-8") as f:
         f.write(canonical(index) + "\n")

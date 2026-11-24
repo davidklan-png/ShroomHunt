@@ -120,7 +120,7 @@ RESEARCH_KEYS = {"schema_version", "snapshot", "slices", "genera"}
 # TASK-024 (spec item 7): the species bundle — per-genus files plus the index
 # (TASK-025 adds summary_sha256 covering the item-9 national summary).
 SPECIES_INDEX_KEYS = {"schema_version", "snapshot", "generated", "genera", "species", "files",
-                      "summary_sha256"}
+                      "summary_sha256", "aliases"}
 SUMMARY_KEYS = {"schema_version", "snapshot", "generated", "species"}
 SPECIES_FILE_KEYS = {"schema_version", "genus", "species"}
 SPECIES_ENTRY_KEYS = {"key", "legacy_key", "name", "name_ja", "family", "order", "class", "kind",
@@ -608,6 +608,21 @@ def check_species(files, docs, staging, reasons, ids):
     elif ix["snapshot"] != digest.hexdigest():
         reasons.append("digest mismatch: species/index.json: stamped snapshot != recomputed "
                        "species digest")
+    al = ix.get("aliases")
+    if not isinstance(al, dict):
+        reasons.append(f"shape: species/index.json: aliases is not an object")
+    else:
+        fmap_keys = set(fmap)
+        for k, v in al.items():
+            if not (isinstance(k, str) and k and isinstance(v, str) and v):
+                reasons.append(f"shape: species/index.json: aliases[{k!r}] = {v!r} is not "
+                               f"a string-to-string entry")
+            elif k in fmap_keys:
+                reasons.append(f"integrity: species/index.json: alias {k!r} collides with a "
+                               f"real genus file")
+            elif v not in fmap_keys:
+                reasons.append(f"integrity: species/index.json: alias {k!r} points at unknown "
+                               f"slug {v!r}")
     _check_summary(ix, files, docs, staging, reasons, genus_names)
 
 

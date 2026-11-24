@@ -483,6 +483,15 @@ class SpeciesBundles(unittest.TestCase):
             self.restamp(p)
         self.reject(dupe, "rows exceed the index's")
 
+    def test_index_aliases_cover_renamed_display_tokens(self):
+        # PR #65 review: a COL rename (old genus token in the name, file under the
+        # accepted genus) must appear in index.aliases pointing at the real slug
+        ix = json.load(open(os.path.join(self.staging, "species", "index.json")))
+        self.assertIsInstance(ix.get("aliases"), dict)
+        for token, slug in ix["aliases"].items():
+            self.assertNotIn(token, ix["files"], token)
+            self.assertIn(slug, ix["files"], slug)
+
     def test_summary_truncated_names_reject(self):
         # PR #10 review: dropping rows (even all) must not pass on the count bound alone
         def drop(p):
