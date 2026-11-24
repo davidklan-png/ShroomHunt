@@ -413,13 +413,14 @@ def main():
             for x in built[mid]["species"]:
                 # complete cell unions (§6): group rows merge the members' whole-cell sq and
                 # eligible months; withdrawn fields (h/l/el/nm) stay empty placeholders.
-                t = sp.setdefault(x["n"], {"n": x["n"], "c": x["c"], "lk": x["lk"], "f": x["f"],
-                                          "k": x["k"], "r": 0, "m": [0] * 12, "sq": 0, "y": None,
-                                          "e": Counter(), "h": [], "l": [], "nm": 0, "i": [], "el": None})
-                for kf in ("c", "lk"):
-                    # PR #4 review: member rows merged by name that disagree on a taxon key
-                    # are homonyms — link nowhere rather than to one member's arbitrary taxon
-                    if x.get(kf) != t.get(kf): t[kf] = None
+                # PR #67 review: rows merge by name AND taxon identity — homonymous taxa
+                # (same name, different key) stay separate rows so each keeps its keys,
+                # its details linkage and its own distribution, instead of one keyless
+                # merged row that name-matches the wrong entry client-side.
+                gkey = (x["n"], x.get("c"), x.get("lk"))
+                t = sp.setdefault(gkey, {"n": x["n"], "c": x["c"], "lk": x["lk"], "f": x["f"],
+                                        "k": x["k"], "r": 0, "m": [0] * 12, "sq": 0, "y": None,
+                                        "e": Counter(), "h": [], "l": [], "nm": 0, "i": [], "el": None})
                 t["r"] += x["r"]; t["sq"] += x["sq"]; t["i"].append(mid)
                 t["m"] = [p + q for p, q in zip(t["m"], x["m"])]
                 if x["y"]: t["y"] = [min(t["y"][0], x["y"][0]), max(t["y"][1], x["y"][1])] if t["y"] else list(x["y"])
