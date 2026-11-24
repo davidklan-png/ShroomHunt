@@ -10,7 +10,12 @@ changed (the file is left untouched byte-for-byte). Beside the index,
 species/summary.json (TASK-025, item 9) is the national per-species ranked list
 [name, col_key, legacy_key, area_count, record_count, mhlw, endemic] the map
 disclosure reads; the index carries its sha256 as summary_sha256 so it is
-covered without joining the genus digest.
+covered without joining the genus digest. species/names.json (TASK-027,
+decision S2) is the name search index: row i belongs to summary row i (the
+same order, no names repeated — they cost ~125 KiB gzip-9 on their own) and
+carries [name_ja, genus_slug, family, [synonyms…]]; the index carries its
+sha256 as names_sha256. Synonyms come from the COL crosswalk (--crosswalk,
+optional: without it every list is empty) and never name a masked taxon.
 
 Our own facts per species (spec section 1, no edibility anywhere): COL key +
 legacy key, names and classification, record count by evidence tier (all gated
@@ -32,7 +37,8 @@ public output (public_taxa.load_gate, col_mask_map fail-closed on a COL-keyed DB
 
 Usage: python3 pipeline/build_species_bundles.py --db data/shroomhunt.duckdb
          --out staging/species [--areas staging/areas]
-         [--enrich data/reference/enrichment.csv]  [gate inputs]
+         [--enrich data/reference/enrichment.csv] [--crosswalk data/raw/col/gbif-col265.tsv.gz]
+         [gate inputs]
 """
 import argparse, csv, hashlib, json, os, re, sys, time, urllib.parse
 from collections import Counter
@@ -41,7 +47,7 @@ import duckdb
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from public_taxa import SPECIES_RANKS, load_gate  # noqa: E402
-from col_xr import ensure, exprs, keyed  # noqa: E402
+from col_xr import ensure, exprs, keyed, load_map  # noqa: E402
 from shared import dedup_temp_jp, kind  # noqa: E402
 from snapshot import canonical  # noqa: E402
 from sources.wikidata import ACCEPTABLE, classify_licence  # noqa: E402
@@ -55,6 +61,10 @@ HOST_STOP = {"on", "in", "near", "and", "with", "dead", "living", "rotten", "woo
              "soil", "host", "the", "of", "unknown", "associated"}
 PHOTO_COLS = ("photo_thumb_url", "photo_file_page", "photo_author",
               "photo_licence", "photo_licence_url")
+# ponytail: 3 synonyms per species — names.json measures 169 KiB gzip-9 capped vs
+# 310 KiB uncapped (37,056 synonyms over ~6,400 species, local DB 2026-11-24); raise
+# the cap if name search needs more
+SYNONYM_CAP = 3
 
 
 def slugify(genus):
@@ -138,6 +148,49 @@ def invert_areas(areas_dir):
     return {k: sorted(v) for k, v in recorded.items()}, {k: sorted(v) for k, v in could.items()}
 
 
+def write_stable(path, raw):
+    """Write only when the bytes differ, so an unchanged file is left untouched
+    (byte-for-byte, mtime included) and a refresh touches only what changed."""
+    if not (os.path.exists(path) and open(path, "rb").read() == raw):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(raw)
+
+
+def load_synonyms(path):
+    """{col_accepted_id: {gbif_name…}} from the COL crosswalk (col_xr.load_map's
+    colmap, in an in-memory connection so the DB file is never written): only
+    col_status 'synonym' rows — 'ambiguous synonym' and 'misapplied' never count."""
+    out = {}
+    con = duckdb.connect()
+    try:
+        load_map(con, path)
+        for colk, syn in con.execute("select col_accepted_id, gbif_name from colmap "
+                                     "where col_status = 'synonym'").fetchall():
+            out.setdefault(colk, set()).add(syn)
+    finally:
+        con.close()
+    return out
+
+
+def synonyms_for(name, keys, crosswalk, gate):
+    """(kept, dropped_by_cap, masked): the display name's crosswalk synonyms under the
+    given COL keys — distinct, never the name itself, never one the gate masks.
+    Ranked: a binomial under another genus first, then any other binomial, then the
+    rest; alphabetical inside each group."""
+    found = set()
+    for k in keys:
+        found |= crosswalk.get(k) or set()
+    found.discard(name)
+    genus = name.split(" ")[0]
+
+    def group(s):
+        head, _, tail = s.partition(" ")
+        return 2 if not tail or " " in tail else (0 if head != genus else 1)
+    public = [s for s in sorted(found, key=lambda s: (group(s), s)) if gate.is_public(species=s)]
+    return public[:SYNONYM_CAP], max(0, len(public) - SYNONYM_CAP), len(found) - len(public)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Build per-genus species bundles + index "
                                              "(spec item 7).")
@@ -147,6 +200,8 @@ def main(argv=None):
                     help="the BUILT area directory (build_areas.py --out); area_ids and "
                          "could_be_found_area_ids invert its published tables")
     ap.add_argument("--enrich", default="data/reference/enrichment.csv")
+    ap.add_argument("--crosswalk", help="the COL crosswalk TSV.gz (data/raw/col/gbif-col265.tsv.gz); "
+                                        "names.json synonyms stay empty without it")
     ap.add_argument("--mask", default="data/reference/taxon_mask.csv")
     ap.add_argument("--coverage", default="data/reference/redlist_coverage.csv")
     ap.add_argument("--exceptions", default="data/reference/match_exceptions.csv")
@@ -231,6 +286,9 @@ def main(argv=None):
 
     enrich_rows = load_enrichment(a.enrich)
     recorded, could_occur = invert_areas(a.areas)
+    # before anything is written: a missing crosswalk fails the build with the
+    # output directory untouched (empty synonym lists are only for no --crosswalk)
+    crosswalk = load_synonyms(a.crosswalk) if a.crosswalk else {}
 
     entries, genus_of = {}, {}
     for spk in sorted(agg):
@@ -289,10 +347,7 @@ def main(argv=None):
         doc = {"schema_version": 1, "genus": genus, "species": rows}
         raw = (canonical(doc) + "\n").encode("utf-8")
         path = os.path.join(a.out, f"{slug}.json")
-        if not (os.path.exists(path) and open(path, "rb").read() == raw):
-            os.makedirs(a.out, exist_ok=True)
-            with open(path, "wb") as fh:
-                fh.write(raw)
+        write_stable(path, raw)
         files[slug] = {"sha256": hashlib.sha256(raw).hexdigest(),
                        "species": len(doc["species"]), "bytes": len(raw)}
         for e in genera[genus]:
@@ -306,7 +361,7 @@ def main(argv=None):
                 aliases[token] = slug
     for name in (os.listdir(a.out) if os.path.isdir(a.out) else []):  # lost every species
         if name.endswith(".json") and name[:-5] not in files \
-                and name not in ("index.json", "summary.json"):
+                and name not in ("index.json", "summary.json", "names.json"):
             os.remove(os.path.join(a.out, name))
             print(f"species: removed stale {name}")
 
@@ -325,9 +380,10 @@ def main(argv=None):
     # and the link keys come from the largest contributor (the details row still
     # resolves per-identity through the genus files).
     by_name = {}
-    for e in entries.values():
+    for spk, e in entries.items():
         row = by_name.setdefault(e["name"], {"areas": set(), "recs": 0, "mhlw": False,
-                                             "end": False, "best": None})
+                                             "end": False, "best": None, "all": []})
+        row["all"].append((spk, e))
         row["areas"] |= set(e["area_ids"] or ())
         row["recs"] += sum(e["records_by_tier"].values())
         row["mhlw"] = row["mhlw"] or bool(e["external"]["mhlw_url"])
@@ -335,22 +391,36 @@ def main(argv=None):
         rank = (len(e["area_ids"]), sum(e["records_by_tier"].values()))
         if row["best"] is None or rank > row["best"][0]:
             row["best"] = (rank, e)
+    ranked = sorted(by_name.items(), key=lambda kv: (-len(kv[1]["areas"]), kv[0]))
     summary = {"schema_version": 1, "snapshot": digest.hexdigest(),
                "generated": time.strftime("%Y-%m-%d"),
-               "species": sorted(([name, b[1]["key"], b[1]["legacy_key"], len(r["areas"]),
-                                   r["recs"], r["mhlw"], r["end"]]
-                                  for name, r in by_name.items() for b in [r["best"]]),
-                                  key=lambda r: (-r[3], r[0]))}
+               "species": [[name, r["best"][1]["key"], r["best"][1]["legacy_key"], len(r["areas"]),
+                            r["recs"], r["mhlw"], r["end"]] for name, r in ranked]}
     sraw = (canonical(summary) + "\n").encode("utf-8")
-    spath = os.path.join(a.out, "summary.json")
-    if not (os.path.exists(spath) and open(spath, "rb").read() == sraw):
-        os.makedirs(a.out, exist_ok=True)
-        with open(spath, "wb") as fh:
-            fh.write(sraw)
+    write_stable(os.path.join(a.out, "summary.json"), sraw)
+    # TASK-027 (decision S2): the name index — one row per summary row, same order,
+    # no names repeated (they cost ~125 KiB gzip-9 on their own). 和名/family are the
+    # first contributor's, as a display name can live under two identities; genus_slug
+    # is the genus file that holds the species: the display token's own file when that
+    # is a real genus (the relocated copy, PR #68), else the file the token aliases to.
+    names_rows, syn_kept, syn_capped, syn_masked = [], 0, 0, 0
+    for name, r in ranked:
+        tok = slugify(name.split(" ")[0])
+        syn, capped, hid = synonyms_for(name, [e["key"] for _, e in r["all"] if e["key"]],
+                                        crosswalk, gate)
+        syn_kept, syn_capped, syn_masked = syn_kept + len(syn), syn_capped + capped, syn_masked + hid
+        names_rows.append([next((e["name_ja"] for _, e in r["all"] if e["name_ja"]), None),
+                           tok if tok in all_slugs else aliases.get(tok) or slugify(genus_of[r["all"][0][0]]),
+                           next((e["family"] for _, e in r["all"] if e["family"]), None), syn])
+    names = {"schema_version": 1, "snapshot": digest.hexdigest(),
+             "generated": summary["generated"], "species": names_rows}
+    nraw = (canonical(names) + "\n").encode("utf-8")
+    write_stable(os.path.join(a.out, "names.json"), nraw)
     index = {"schema_version": 1, "snapshot": digest.hexdigest(),
              "generated": time.strftime("%Y-%m-%d"), "genera": len(files),
              "species": sum(f["species"] for f in files.values()), "files": files,
-             "aliases": aliases, "summary_sha256": hashlib.sha256(sraw).hexdigest()}
+             "aliases": aliases, "summary_sha256": hashlib.sha256(sraw).hexdigest(),
+             "names_sha256": hashlib.sha256(nraw).hexdigest()}
     os.makedirs(a.out, exist_ok=True)
     with open(os.path.join(a.out, "index.json"), "w", newline="\n", encoding="utf-8") as f:
         f.write(canonical(index) + "\n")
@@ -362,6 +432,8 @@ def main(argv=None):
           f"{masked} masked records excluded, "
           f"{sum(f['bytes'] for f in files.values()):,} bytes genus files; "
           f"summary {len(summary['species'])} rows / {len(sraw):,} bytes; "
+          f"names {len(names_rows)} rows / {len(nraw):,} bytes "
+          f"(synonyms {syn_kept} kept, {syn_capped} capped, {syn_masked} masked); "
           f"photo {ext('photo')}, mhlw {ext('mhlw_url')}, endemic "
           f"{sum(1 for e in entries.values() if e['external']['endemic_hosoya2016'])}, "
           f"literature {ext('literature')}, mushroomexpert {ext('mushroomexpert_url')}, "
