@@ -483,6 +483,13 @@ class SpeciesBundles(unittest.TestCase):
             self.restamp(p)
         self.reject(dupe, "rows exceed the index's")
 
+    def test_summary_truncated_names_reject(self):
+        # PR #10 review: dropping rows (even all) must not pass on the count bound alone
+        def drop(p):
+            self.edit(p, "species/summary.json", lambda d: d["species"].__setitem__(slice(2), []))
+            self.restamp(p)
+        self.reject(drop, "summary names disagree with the genus files")
+
     def test_summary_duplicate_display_names_reject(self):
         def dup(p):
             def add(d):

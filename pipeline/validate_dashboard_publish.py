@@ -572,6 +572,7 @@ def check_species(files, docs, staging, reasons, ids):
         reasons.append(f"integrity: species/index.json: species {ix['species']} != the summed "
                        f"per-file counts")
     digest = hashlib.sha256()
+    genus_names = set()                             # PR #10 review: the summary's name set
     for slug in sorted(fmap):
         path = os.path.join(staging, "species", f"{slug}.json")
         if not os.path.exists(path):
@@ -599,16 +600,18 @@ def check_species(files, docs, staging, reasons, ids):
                            f"{meta['species']} != {len(d['species'])} entries")
         for i, e in enumerate(d["species"]):
             _check_species_entry(e, f"species/{slug}.json", i, reasons, ids)
+            if isinstance(e, dict) and isinstance(e.get("name"), str):
+                genus_names.add(e["name"])
     if not (isinstance(ix["snapshot"], str) and HEX64.match(ix["snapshot"])):
         reasons.append(f"snapshot: species/index.json: {ix['snapshot']!r} is not a 64-hex "
                        f"lowercase digest")
     elif ix["snapshot"] != digest.hexdigest():
         reasons.append("digest mismatch: species/index.json: stamped snapshot != recomputed "
                        "species digest")
-    _check_summary(ix, files, docs, staging, reasons)
+    _check_summary(ix, files, docs, staging, reasons, genus_names)
 
 
-def _check_summary(ix, files, docs, staging, reasons):
+def _check_summary(ix, files, docs, staging, reasons, genus_names=frozenset()):
     """species/summary.json (TASK-025, item 9): the national ranked list. A sibling
     of the index — required whenever species/ is, hashed by the index's
     summary_sha256 (never by the genus digest), rows checked for shape, the
@@ -661,6 +664,14 @@ def _check_summary(ix, files, docs, staging, reasons):
     if shaped and is_uint(ix.get("species")) and not (len(rows) <= ix["species"]):
         reasons.append(f"integrity: {rel}: {len(rows)} rows exceed the index's "
                        f"{ix['species']} species")
+    # PR #10 review: a truncated or emptied summary must not pass just because it sits
+    # under the species count — its names are exactly the genus files' display names
+    if shaped and genus_names:
+        missing = genus_names - {r[0] for r in rows}
+        extra = {r[0] for r in rows} - genus_names
+        if missing or extra:
+            reasons.append(f"integrity: {rel}: summary names disagree with the genus files "
+                           f"({len(missing)} missing, {len(extra)} unknown)")
     if shaped and len({r[0] for r in rows}) != len(rows):
         reasons.append(f"integrity: {rel}: duplicate display names in the summary")
 
