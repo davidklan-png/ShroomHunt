@@ -136,3 +136,9 @@ masking (unchanged, D6):
   misses into `col_mask_overrides.csv`; rows gone stale (entries the 2025 list
   dropped, or legacy keys the 2025 matcher re-picked) are deleted — emit raises
   on them by design.
+- **Second source — lichens (2026-11-24, TASK-026, decision M1)**: the Ministry publishes
+  lichens as their own list,
+  https://www.env.go.jp/nature/kisho/5th-rl-2025-book/04-5thredlist-lichens.pdf (153 names).
+  The same code parses it into the same files; every parsed row and JSON entry carries
+  `list` (fungi | lichens), and the lichen names are part of the 2025 side of the transition
+  rule above. Second switch: 13 unmatched names over both lists → union, 348 names.

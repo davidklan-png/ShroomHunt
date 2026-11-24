@@ -41,3 +41,30 @@ name,favolus pseudobetulius,3DWWJ,api-name,accepted Favolus pseudobetulinus (spe
 name,rhizopogon togasawarius,4SDCD,api-name,accepted Rhizopogon togasawarius (species)
 name,rhizopogon yakushimensis,4SDD4,api-name,accepted Rhizopogon yakushimensis (species)
 name,tulostoma fimbriatum var. fimbriatum,DRWQG,api-name,accepted Tulostoma fimbriatum fimbriatum (variety)
+key,2601265,3B4FN,api-key,accepted Erioderma sorediatum (species)
+key,3419927,6DVF9,api-key,accepted Echinoplaca epiphylla (species)
+key,3546272,5XS5N,api-key,accepted Chiodecton sorediatum (species)
+key,5493065,NDF9N,api-key,accepted Dermatocarpon tuzibei (species)
+key,8451397,B22ZG,api-key,accepted Pyxine berteroana (species)
+name,arthonia fuscocyanea,,api-name,no-col-counterpart: matched only genus Arthonia
+name,cladonia inobeana,,api-name,no-col-counterpart: matched only genus Cladonia
+name,cladonia koyaënsis,MKLW2,api-name,accepted Cladonia koyaensis (species)
+name,collema shiroumanum var. kiusianum,,api-name,infraspecific-unresolved: accepted Collema shiroumanum lacks the final epithet (parent-species masking needs a ruling)
+name,dermatocarpon tuzibei,NDF9N,api-name,accepted Dermatocarpon tuzibei (species)
+name,dichosporidium sorediatum,5XS5N,api-name,accepted Chiodecton sorediatum (species)
+name,echinoplaca epiphylla,6DVF9,api-name,accepted Echinoplaca epiphylla (species)
+name,erioderma sorediatum,3B4FN,api-name,accepted Erioderma sorediatum (species)
+name,icmadophila japonicum,NY7LL,api-name,accepted Glossodium japonicum (species)
+name,lobaria kazawaënsis,PXYFR,api-name,accepted Lobaria kazawaensis (species)
+name,microxyphiomyces kashiwadanii,,api-name,no-col-counterpart: matched only genus Microxyphiomyces
+name,myelochroa amagiensis,V7T2R,api-name,accepted Myelochroa amagiensis (species)
+name,pertusaria boninensis,,api-name,no-col-counterpart: matched only genus Pertusaria
+name,physconia hokkaidensis,V7SQZ,api-name,accepted Physconia hokkaidensis (species)
+name,porina subrubrosphaera,V7SPB,api-name,accepted Porina subrubrosphaera (species)
+name,pyxine cocoës,4QYJD,api-name,accepted Pyxine cocoes (species)
+name,pyxine meissnerina,B22ZG,api-name,accepted Pyxine berteroana (species)
+name,relicina echinocarpa,,api-name,no-col-counterpart: matched only genus Relicina
+name,relicina segregata,,api-name,no-col-counterpart: matched only genus Relicina
+name,solorina platycarpa,DSRXL,api-name,accepted Solorina plathycarpa (species)
+name,usnea koyana,,api-name,no-col-counterpart: matched only genus Usnea
+name,usnea yakushimensis,,api-name,no-col-counterpart: matched only genus Usnea
