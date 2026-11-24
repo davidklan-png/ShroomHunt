@@ -122,7 +122,8 @@ jobs:
             --redlist data/raw/redlist/redlist_fungi_jp.json
           python3 pipeline/build_species_bundles.py --db data/shroomhunt.duckdb \
             --out staging/species --areas staging/areas \
-            --redlist data/raw/redlist/redlist_fungi_jp.json
+            --redlist data/raw/redlist/redlist_fungi_jp.json \
+            --crosswalk data/raw/col/gbif-col265.tsv.gz
 
       - name: Save species enrichment cache
         if: ${{ inputs.geography_only != true }}

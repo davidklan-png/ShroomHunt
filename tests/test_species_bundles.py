@@ -2,11 +2,11 @@
 publication checks (spec item 7).
 
 Fictional taxa as in test_public_taxa_outputs.py / test_area_sanitization.py.
-The fixture DB is COL-keyed for one species (CX1) and legacy-keyed for the
+The fixture DB is COL-keyed for two species (CX1, CX2) and legacy-keyed for the
 rest, so both identity paths (key/legacy_key, enrichment joins, gate scans)
 are exercised in one build. The staging bundle is built the way
 publish-dashboard.yml builds it: dashboard -> areas -> enrich -> species
-bundles -> snapshot -> validate.
+bundles (with the fixture COL crosswalk, TASK-027) -> snapshot -> validate.
 """
 import csv, hashlib, json, os, re, shutil, subprocess, sys, tempfile, unittest
 import urllib.parse
@@ -18,6 +18,7 @@ import duckdb  # noqa: E402
 from test_public_taxa import FIX, write_coverage  # noqa: E402
 from test_public_taxa_outputs import run_builder  # noqa: E402
 from test_area_sanitization import ISLANDS_CSV  # noqa: E402
+from test_col_xr import write_tsv_gz  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKFLOW = os.path.join(REPO, ".github", "workflows", "publish-dashboard.yml")
@@ -51,6 +52,11 @@ JP_ROWS = [
      "HUMAN_OBSERVATION", "Agaricomycetes", "Basidiomycota", "26.45", "127.85", "7", "2015",
      None, "Okinawa", "dx", "CX1", "Publicus bonum", "Fictaceae", "Agaricales",
      "Agaricomycetes", "Publicus"),
+    # the same display name under a second, unmapped identity (TASK-025: 65 real
+    # cases): one summary row and one names row for the name, two entries in the files
+    ("56", "5056", "Publicus bonum", "Publicus", "Fictaceae", "Agaricales", "SPECIES",
+     "HUMAN_OBSERVATION", "Agaricomycetes", "Basidiomycota", "26.45", "127.85", "7", "2016",
+     None, "Okinawa", "dx", None, None, None, None, None, None),
     # PR #68 review fixture: a COL rename whose DISPLAY token is a real genus above
     # (Publicus) while the accepted genus is Novus — no alias possible (collision), so
     # the entry must also be served from publicus.json
@@ -66,14 +72,57 @@ JP_ROWS = [
     ("7", None, "Tricholoma fictum", "Tricholoma", "Fictaceae", "Agaricales", "SPECIES",
      "HUMAN_OBSERVATION", "Agaricomycetes", "Basidiomycota", "26.3", "127.8", "4", "2011",
      None, "Okinawa", "dx", None, None, None, None, None, None),
+    # masked by legacy key AND COL key (COLK1 is in the fixture col_mask_map): its
+    # crosswalk synonyms (NAMES_XWALK) must never reach names.json (TASK-027)
     ("8", "9001", "Innocens alia", "Innocens", "Fictaceae", "Agaricales", "SPECIES",
      "HUMAN_OBSERVATION", "Agaricomycetes", "Basidiomycota", "26.3", "127.8", "4", "2011",
-     None, "Okinawa", "dx", None, None, None, None, None, None),
+     None, "Okinawa", "dx", "COLK1", "Innocens alia", "Fictaceae", "Agaricales",
+     "Agaricomycetes", "Innocens"),
 ]
 XE_ROWS = [("1", "on dead Quercus trunk", "Quercus serrata | Fagus crenata", 1234.0, None, None),
            ("2", None, "Quercus serrata", 800.0, None, None),
            ("3", None, None, 900.0, None, None)]
 EA_ROWS = [("5002", "Publicus bonum", "Fictaceae", 24.0, 121.0, 6, 3, "CX1")]
+
+# TASK-027: the fixture COL crosswalk (real gbif-col265 column names, via
+# test_col_xr.write_tsv_gz). Synonyms hang off the COL key of CX1/CX2 and of the
+# masked fixture species. Row: (gbif:ID, gbif:rank, gbif:scientificName, gbif:kingdom,
+# col:ID, col:status, col:scientificName, col:acceptedID, col:acceptedScientificName,
+# col:family, col:genus)
+NAMES_XWALK = [
+    ("6001", "SPECIES", "Novus bonum", "Fungi", "CX9", "synonym", "Novus bonum",
+     "CX1", "Publicus bonum", "Fictaceae", "Novus"),
+    ("6002", "SPECIES", "Publicus probus", "Fungi", "CX10", "synonym", "Publicus probus",
+     "CX1", "Publicus bonum", "Fictaceae", "Publicus"),
+    # a masked name (the fixture match-exception alias) as a synonym: the gate drops it
+    ("6003", "SPECIES", "Boletus fictus", "Fungi", "CX11", "synonym", "Boletus fictus",
+     "CX1", "Publicus bonum", "Fictaceae", "Publicus"),
+    # the display name itself: never a synonym
+    ("6004", "SPECIES", "Publicus bonum", "Fungi", "CX12", "synonym", "Publicus bonum",
+     "CX1", "Publicus bonum", "Fictaceae", "Publicus"),
+    # 'ambiguous synonym' and 'misapplied' never count
+    ("6005", "SPECIES", "Vagus bonum", "Fungi", "CX13", "ambiguous synonym", "Vagus bonum",
+     "CX1", "Publicus bonum", "Fictaceae", "Publicus"),
+    ("6006", "SPECIES", "Mistakenus bonum", "Fungi", "CX14", "misapplied", "Mistakenus bonum",
+     "CX1", "Publicus bonum", "Fictaceae", "Publicus"),
+    # CX2: four other-genus binomials (alphabetical, so Zeta falls off the cap of 3),
+    # a same-genus binomial and a trinomial — both ranked after them
+    ("6007", "SPECIES", "Novus relictus", "Fungi", "CX15", "synonym", "Novus relictus",
+     "CX2", "Publicus relictus", "Fictaceae", "Novus"),
+    ("6008", "SPECIES", "Alius relictus", "Fungi", "CX16", "synonym", "Alius relictus",
+     "CX2", "Publicus relictus", "Fictaceae", "Alius"),
+    ("6009", "SPECIES", "Ceterus relictus", "Fungi", "CX17", "synonym", "Ceterus relictus",
+     "CX2", "Publicus relictus", "Fictaceae", "Ceterus"),
+    ("6010", "SPECIES", "Zeta relictus", "Fungi", "CX18", "synonym", "Zeta relictus",
+     "CX2", "Publicus relictus", "Fictaceae", "Zeta"),
+    ("6011", "SPECIES", "Publicus relictior", "Fungi", "CX19", "synonym", "Publicus relictior",
+     "CX2", "Publicus relictus", "Fictaceae", "Publicus"),
+    ("6012", "SPECIES", "Publicus relictus var. minor", "Fungi", "CX20", "synonym",
+     "Publicus relictus var. minor", "CX2", "Publicus relictus", "Fictaceae", "Publicus"),
+    # the masked fixture species' own synonyms
+    ("6013", "SPECIES", "Innocens vetus", "Fungi", "CX21", "synonym", "Innocens vetus",
+     "COLK1", "Innocens alia", "Fictaceae", "Innocens"),
+]
 
 ENRICH_HEADER = ["sp_key", "name", "wikidata_qid", "wikipedia_ja", "wikipedia_en",
                  "photo_thumb_url", "photo_file_page", "photo_author", "photo_licence",
@@ -97,6 +146,10 @@ ENRICH_ROWS = [
      "https://creativecommons.org/licenses/by/4.0", "", "",
      json.dumps([{"doi": "10.1/bonum", "title": "Bonum notes", "year": 2018}]),
      "https://www.mushroomexpert.com/publicus.html", "genus"),
+    # the second identity of the same display name carries the 和名: the names row
+    # takes the first contributor's 和名 that exists, whichever identity it sits on
+    ("L5056", "Publicus bonum", "", "https://ja.wikipedia.org/wiki/テストボナムタケ",
+     "", "", "", "", "", "", "", "", "", "", ""),
     # L5009 has no row at all: every external field stays empty, build stays green
 ]
 
@@ -162,6 +215,7 @@ class SpeciesBundles(unittest.TestCase):
         cls.enrich = os.path.join(cls.tmp, "enrichment.csv")
         with open(cls.enrich, "w") as f:
             f.write(ENRICHMENT_CSV)
+        cls.xwalk = write_tsv_gz(os.path.join(cls.tmp, "gbif-col265.tsv.gz"), NAMES_XWALK)
         # the publish-dashboard.yml order: dashboard -> areas -> enrich -> species -> stamp
         cls.staging = os.path.join(cls.tmp, "staging")
         r = run_builder("build_dashboard_data.py", "--db", cls.db,
@@ -172,10 +226,7 @@ class SpeciesBundles(unittest.TestCase):
                         "--out", os.path.join(cls.staging, "areas"),
                         "--islands", islands, *cls.refs)
         assert r.returncode == 0, r.stdout + r.stderr
-        cls.last_run = run_builder("build_species_bundles.py", "--db", cls.db,
-                                   "--out", os.path.join(cls.staging, "species"),
-                                   "--areas", os.path.join(cls.staging, "areas"),
-                                   "--enrich", cls.enrich, *cls.refs)
+        cls.last_run = cls.rebuild()
         assert cls.last_run.returncode == 0, cls.last_run.stdout + cls.last_run.stderr
         r = run_builder("snapshot.py", cls.staging)
         assert r.returncode == 0, r.stdout + r.stderr
@@ -187,6 +238,14 @@ class SpeciesBundles(unittest.TestCase):
         return subprocess.run([sys.executable, os.path.join(REPO, "pipeline",
                                                             "validate_dashboard_publish.py"),
                                path, *cls.refs, *extra], capture_output=True, text=True, cwd=REPO)
+
+    @classmethod
+    def rebuild(cls, out=None):
+        """Run the bundle builder the way setUpClass did (fixture crosswalk included)."""
+        return run_builder("build_species_bundles.py", "--db", cls.db,
+                           "--out", out or os.path.join(cls.staging, "species"),
+                           "--areas", os.path.join(cls.staging, "areas"),
+                           "--enrich", cls.enrich, "--crosswalk", cls.xwalk, *cls.refs)
 
     def genus(self, slug):
         with open(os.path.join(self.staging, "species", f"{slug}.json")) as f:
@@ -223,7 +282,7 @@ class SpeciesBundles(unittest.TestCase):
     def test_public_species_count_and_masked_absent(self):
         # 6 public species (lautus, alter, bonum, proximus... plus none other), the two
         # masked fixture taxa (Tricholoma fictum by name, key 9001) never appear
-        self.assertEqual(self.index["species"], 6)   # 5 species; the renamed one served twice
+        self.assertEqual(self.index["species"], 7)   # 6 identities; the renamed one served twice
         blob = ""
         for slug in self.index["files"]:
             with open(os.path.join(self.staging, "species", f"{slug}.json")) as f:
@@ -294,15 +353,12 @@ class SpeciesBundles(unittest.TestCase):
                         "--enrich", os.path.join(self.tmp, "nope.csv"), *self.refs)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         with open(os.path.join(out, "index.json")) as f:
-            self.assertEqual(json.load(f)["species"], 6)
+            self.assertEqual(json.load(f)["species"], 7)
 
     def test_rewrite_of_unchanged_genus_file_is_byte_identical(self):
         slug, path = "prosus", os.path.join(self.staging, "species", "prosus.json")
         before, mtime = open(path, "rb").read(), os.path.getmtime(path)
-        r = run_builder("build_species_bundles.py", "--db", self.db,
-                        "--out", os.path.join(self.staging, "species"),
-                        "--areas", os.path.join(self.staging, "areas"),
-                        "--enrich", self.enrich, *self.refs)
+        r = self.rebuild()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(open(path, "rb").read(), before)
         self.assertEqual(os.path.getmtime(path), mtime)   # not even rewritten
@@ -327,7 +383,7 @@ class SpeciesBundles(unittest.TestCase):
         self.assertEqual(by_name["Prosus lautus"],
                          ["Prosus lautus", None, "5001", 1, 3, True, True])
         self.assertEqual(by_name["Publicus bonum"],
-                         ["Publicus bonum", "CX1", None, 1, 1, False, False])
+                         ["Publicus bonum", "CX1", None, 1, 2, False, False])   # two identities: records sum
         self.assertEqual(by_name["Prosus alter"],
                          ["Prosus alter", None, "5003", 1, 1, False, False])
         self.assertEqual(by_name["Neighborus proximus"],
@@ -347,10 +403,7 @@ class SpeciesBundles(unittest.TestCase):
     def test_rewrite_of_unchanged_summary_is_byte_identical(self):
         path = os.path.join(self.staging, "species", "summary.json")
         before, mtime = open(path, "rb").read(), os.path.getmtime(path)
-        r = run_builder("build_species_bundles.py", "--db", self.db,
-                        "--out", os.path.join(self.staging, "species"),
-                        "--areas", os.path.join(self.staging, "areas"),
-                        "--enrich", self.enrich, *self.refs)
+        r = self.rebuild()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(open(path, "rb").read(), before)
         self.assertEqual(os.path.getmtime(path), mtime)   # not even rewritten
@@ -436,12 +489,12 @@ class SpeciesBundles(unittest.TestCase):
 
     # ---------- the summary reject matrix (TASK-025) -------------------------------------------
 
-    def restamp(self, path):
-        """Re-point index summary_sha256 at the (tampered) summary on disk, so only
-        the targeted check can fire."""
-        with open(os.path.join(path, "species", "summary.json"), "rb") as f:
+    def restamp(self, path, rel="summary.json", key="summary_sha256"):
+        """Re-point the index's <key> at the (tampered) file on disk, so only the
+        targeted check can fire."""
+        with open(os.path.join(path, "species", rel), "rb") as f:
             sha = hashlib.sha256(f.read()).hexdigest()
-        self.edit(path, "species/index.json", lambda d: d.update(summary_sha256=sha))
+        self.edit(path, "species/index.json", lambda d: d.update({key: sha}))
 
     def test_missing_summary_rejects(self):
         def gone(p):
@@ -482,7 +535,8 @@ class SpeciesBundles(unittest.TestCase):
         self.reject(swap, "not ranked by area_count desc, name asc")
 
     def test_summary_row_count_exceeding_species_rejects(self):
-        # the fixture index counts 6 (the relocated renamed row is served twice) while
+        # the fixture index counts 7 (one name under two identities, the relocated
+        # renamed row served twice) while
         # the summary has 5 rows, so pad with three to exceed it outright
         def dupe(p):
             def add(d):
@@ -499,8 +553,10 @@ class SpeciesBundles(unittest.TestCase):
         # genuine Publicus genus exists, so no alias is possible — the display genus's
         # file must carry a copy or the row degrades to a plain link
         def names(slug):
+            # name -> COL key, for the COL-keyed entries (Publicus bonum also has a
+            # legacy-only identity under the same display name)
             with open(os.path.join(self.staging, "species", f"{slug}.json")) as f:
-                return {e["name"]: e["key"] for e in json.load(f)["species"]}
+                return {e["name"]: e["key"] for e in json.load(f)["species"] if e["key"]}
         self.assertIn("novus", self.index["files"])
         self.assertIn("Publicus relictus", names("novus"))          # home file
         pub = names("publicus")
@@ -541,6 +597,151 @@ class SpeciesBundles(unittest.TestCase):
             self.restamp(p)
         self.reject(masked, "protected taxon")
 
+    # ---------- the name index (TASK-027, decision S2) -------------------------------------------
+
+    def names(self, staging=None):
+        with open(os.path.join(staging or self.staging, "species", "names.json")) as f:
+            return json.load(f)
+
+    def test_names_row_for_row_with_summary(self):
+        nm = self.names()
+        self.assertEqual(set(nm), {"schema_version", "snapshot", "generated", "species"})
+        self.assertEqual((nm["schema_version"], nm["snapshot"]), (1, self.index["snapshot"]))
+        self.assertEqual(nm["generated"], self.summary()["generated"])
+        # same order as summary.json, one row per display name, the name never repeated
+        self.assertEqual([r[0] for r in self.summary()["species"]],
+                         ["Neighborus proximus", "Prosus alter", "Prosus lautus",
+                          "Publicus bonum", "Publicus relictus"])
+        self.assertEqual(nm["species"], [
+            [None, "neighborus", "Fictaceae", []],
+            [None, "prosus", "Fictaceae", []],
+            ["ハダイロガサ", "prosus", "Fictaceae", []],
+            # one display name under two identities: the summary row keeps the larger
+            # contributor's keys (CX1; a tie keeps the first), the row's 和名 is the
+            # first one any contributor has (here the second identity's), and the
+            # synonyms cover every contributor's COL key
+            ["テストボナムタケ", "publicus", "Fictaceae", ["Novus bonum", "Publicus probus"]],
+            # the relocated renamed entry (home novus, display token a real genus) takes
+            # its home file: the one genus file that always lists the entry
+            [None, "novus", "Fictaceae",
+             ["Alius relictus", "Ceterus relictus", "Novus relictus"]]])
+        with open(os.path.join(self.staging, "species", "names.json"), "rb") as f:
+            self.assertEqual(self.index["names_sha256"], hashlib.sha256(f.read()).hexdigest())
+
+    def test_names_synonyms_ranked_capped_and_gated(self):
+        # other-genus binomials alphabetical first (Zeta relictus falls off the cap of 3),
+        # then same-genus binomials (Publicus relictior), then the rest (the trinomial)
+        self.assertEqual([s for r in self.names()["species"] for s in r[3]],
+                         ["Novus bonum", "Publicus probus", "Alius relictus",
+                          "Ceterus relictus", "Novus relictus"])
+        blob = json.dumps(self.names(), ensure_ascii=False)
+        # never published: the display name, a synonym the gate masks by name, the
+        # ambiguous-synonym and misapplied rows, the masked species' own synonyms,
+        # and what the cap dropped
+        for absent in ("Publicus bonum", "Boletus", "Vagus", "Mistakenus", "Innocens", "vetus",
+                       "Zeta", "relictior", "var."):
+            self.assertNotIn(absent, blob)
+        self.assertIn("names 5 rows", self.last_run.stdout)
+        self.assertIn("synonyms 5 kept, 3 capped, 1 masked", self.last_run.stdout)
+
+    def test_names_without_crosswalk_keep_every_row_but_the_synonyms(self):
+        out = os.path.join(tempfile.mkdtemp(prefix="sp-"), "species")
+        r = run_builder("build_species_bundles.py", "--db", self.db, "--out", out,
+                        "--areas", os.path.join(self.staging, "areas"),
+                        "--enrich", self.enrich, *self.refs)            # no --crosswalk
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.names(os.path.dirname(out))["species"],
+                         [row[:3] + [[]] for row in self.names()["species"]])
+
+    def test_rewrite_of_unchanged_names_is_byte_identical(self):
+        path = os.path.join(self.staging, "species", "names.json")
+        before, mtime = open(path, "rb").read(), os.path.getmtime(path)
+        r = self.rebuild()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(open(path, "rb").read(), before)
+        self.assertEqual(os.path.getmtime(path), mtime)   # not even rewritten
+
+    def test_missing_names_rejects(self):
+        def gone(p):
+            os.remove(os.path.join(p, "species", "names.json"))
+        self.reject(gone, "missing names file: species/names.json")
+
+    def test_tampered_names_rejects(self):
+        def tamper(p):
+            with open(os.path.join(p, "species", "names.json"), "a") as f:
+                f.write(" ")
+        self.reject(tamper, "does not match the index's names_sha256")
+
+    def test_names_hash_mismatch_rejects(self):
+        def rehash(p):
+            self.edit(p, "species/index.json", lambda d: d.update(names_sha256="0" * 64))
+        self.reject(rehash, "does not match the index's names_sha256")
+
+    def test_masked_synonym_rejects(self):
+        def masked(p):
+            self.edit(p, "species/names.json",
+                      lambda d: d["species"][3][3].append("Boletus fictus"))
+            self.restamp(p, "names.json", "names_sha256")
+        self.reject(masked, "species/names.json: species[3].synonyms[2] is masked")
+
+    def test_swapped_names_rows_reject(self):
+        def swap(i, j):
+            def fn(p):
+                def sw(d):
+                    d["species"][i], d["species"][j] = d["species"][j], d["species"][i]
+                self.edit(p, "species/names.json", sw)
+                self.restamp(p, "names.json", "names_sha256")
+            return fn
+        # across genera: the slug's file does not list the summary name
+        self.reject(swap(0, 2),
+                    "species/names.json: species[0] genus_slug is not a genus file that lists "
+                    "the summary name")
+        # inside one genus both files list both names: only 和名/family tell the rows apart
+        self.reject(swap(1, 2), "species/names.json: species[1] name_ja/family disagree")
+
+    def test_bad_names_row_rejects(self):
+        def arity(p):
+            self.edit(p, "species/names.json", lambda d: d["species"][0].pop())
+            self.restamp(p, "names.json", "names_sha256")
+        self.reject(arity, "is not a [name_ja|null, genus_slug, family|null, [synonyms…]] row")
+
+        def unknown_slug(p):
+            self.edit(p, "species/names.json", lambda d: d["species"][0].__setitem__(1, "nowhere"))
+            self.restamp(p, "names.json", "names_sha256")
+        self.reject(unknown_slug, "genus_slug is not a genus file in the index")
+
+    def test_names_slug_must_be_a_file_that_lists_the_name(self):
+        # PR #15 review: a real genus file in the index is not enough. It must hold an
+        # entry under the summary name, or the page fetches a file without the species
+        # (the alias map keeps one target per token, so it could not tell).
+        def other_genus(p):
+            self.edit(p, "species/names.json", lambda d: d["species"][0].__setitem__(1, "prosus"))
+            self.restamp(p, "names.json", "names_sha256")
+        self.reject(other_genus, "species[0] genus_slug is not a genus file that lists the "
+                                 "summary name")
+
+    def test_missing_crosswalk_fails_before_any_write(self):
+        # PR #15 review: only the absent flag yields empty synonym lists. A path that
+        # does not exist fails the build with the output directory untouched.
+        out = os.path.join(tempfile.mkdtemp(prefix="sp-"), "species")
+        r = run_builder("build_species_bundles.py", "--db", self.db, "--out", out,
+                        "--areas", os.path.join(self.staging, "areas"),
+                        "--enrich", self.enrich, "--crosswalk", self.xwalk + ".nope", *self.refs)
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(os.path.exists(out))
+
+    def test_names_row_count_and_duplicate_synonyms_reject(self):
+        def drop(p):
+            self.edit(p, "species/names.json", lambda d: d["species"].pop())
+            self.restamp(p, "names.json", "names_sha256")
+        self.reject(drop, "4 rows != the summary's 5")
+
+        def dupe(p):
+            self.edit(p, "species/names.json",
+                      lambda d: d["species"][3][3].append("Novus bonum"))
+            self.restamp(p, "names.json", "names_sha256")
+        self.reject(dupe, "species[3] synonyms are not distinct")
+
     # ---------- the workflow: enrich + species build + ship -------------------------------------
 
     def test_workflow_builds_and_ships_species(self):
@@ -548,6 +749,7 @@ class SpeciesBundles(unittest.TestCase):
             text = f.read()
         for marker in ("pipeline/enrich.py", "build_species_bundles.py",
                        "staging/species", "cp -r staging/species",
+                       "--crosswalk data/raw/col/gbif-col265.tsv.gz",
                        "enrichment-retrieved.txt", "actions/cache/restore@v4",
                        "actions/cache/save@v4"):
             self.assertIn(marker, text)
@@ -658,7 +860,7 @@ class EnrichJoin(unittest.TestCase):
         out = os.path.join(self.tmp, "joined.csv")
         r, rows = self.run_enrich(out)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(set(rows), {"L5001", "L5003", "CX1", "CX2", "L5009"})   # public species only
+        self.assertEqual(set(rows), {"L5001", "L5003", "CX1", "CX2", "L5009", "L5056"})   # public species only
         row = rows["L5001"]
         self.assertEqual(row["wikidata_qid"], "Q111")
         self.assertEqual(row["wikipedia_ja"],
