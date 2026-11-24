@@ -51,6 +51,13 @@ JP_ROWS = [
      "HUMAN_OBSERVATION", "Agaricomycetes", "Basidiomycota", "26.45", "127.85", "7", "2015",
      None, "Okinawa", "dx", "CX1", "Publicus bonum", "Fictaceae", "Agaricales",
      "Agaricomycetes", "Publicus"),
+    # PR #68 review fixture: a COL rename whose DISPLAY token is a real genus above
+    # (Publicus) while the accepted genus is Novus — no alias possible (collision), so
+    # the entry must also be served from publicus.json
+    ("55", "5055", "Publicus relictus", "Publicus", "Fictaceae", "Agaricales", "SPECIES",
+     "HUMAN_OBSERVATION", "Agaricomycetes", "Basidiomycota", "26.2", "127.7", "8", "2019",
+     None, "Okinawa", "dx", "CX2", "Publicus relictus", "Fictaceae", "Agaricales",
+     "Agaricomycetes", "Novus"),
     # recorded only in the t4028 tile, nearby okisle: a could-occur candidate there
     ("6", "5009", "Neighborus proximus", "Neighborus", "Fictaceae", "Agaricales", "SPECIES",
      "HUMAN_OBSERVATION", "Agaricomycetes", "Basidiomycota", "26.9", "128.15", "6", "2012",
@@ -216,7 +223,7 @@ class SpeciesBundles(unittest.TestCase):
     def test_public_species_count_and_masked_absent(self):
         # 6 public species (lautus, alter, bonum, proximus... plus none other), the two
         # masked fixture taxa (Tricholoma fictum by name, key 9001) never appear
-        self.assertEqual(self.index["species"], 4)
+        self.assertEqual(self.index["species"], 6)   # 5 species; the renamed one served twice
         blob = ""
         for slug in self.index["files"]:
             with open(os.path.join(self.staging, "species", f"{slug}.json")) as f:
@@ -287,7 +294,7 @@ class SpeciesBundles(unittest.TestCase):
                         "--enrich", os.path.join(self.tmp, "nope.csv"), *self.refs)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         with open(os.path.join(out, "index.json")) as f:
-            self.assertEqual(json.load(f)["species"], 4)
+            self.assertEqual(json.load(f)["species"], 6)
 
     def test_rewrite_of_unchanged_genus_file_is_byte_identical(self):
         slug, path = "prosus", os.path.join(self.staging, "species", "prosus.json")
@@ -314,7 +321,7 @@ class SpeciesBundles(unittest.TestCase):
         # every fixture species occurs in exactly one area, so the ranking is by name
         self.assertEqual([r[0] for r in sm["species"]],
                          ["Neighborus proximus", "Prosus alter", "Prosus lautus",
-                          "Publicus bonum"])
+                          "Publicus bonum", "Publicus relictus"])
         self.assertEqual(sm["species"], sorted(sm["species"], key=lambda r: (-r[3], r[0])))
         by_name = {r[0]: r for r in sm["species"]}
         self.assertEqual(by_name["Prosus lautus"],
@@ -475,33 +482,31 @@ class SpeciesBundles(unittest.TestCase):
         self.reject(swap, "not ranked by area_count desc, name asc")
 
     def test_summary_row_count_exceeding_species_rejects(self):
+        # the fixture index counts 6 (the relocated renamed row is served twice) while
+        # the summary has 5 rows, so pad with three to exceed it outright
         def dupe(p):
             def add(d):
-                r = d["species"][0]
-                d["species"].append([r[0] + " twin", *r[1:]])   # pushes rows over the species count
+                for i in range(3):
+                    r = d["species"][0]
+                    d["species"].append([f"{r[0]} twin{i}", *r[1:]])
+                d["species"].sort(key=lambda r: (-r[3], r[0]))
             self.edit(p, "species/summary.json", add)
             self.restamp(p)
         self.reject(dupe, "rows exceed the index's")
 
     def test_renamed_entry_whose_display_genus_is_real_is_served_twice(self):
-        # PR #68 review: Boletus luridiformis var. luridiformis lives under neoboletus
-        # but boletus.json exists, so no alias is possible — the display genus's file
-        # must carry a copy or the row degrades to a plain link
-        ix = json.load(open(os.path.join(self.staging, "species", "index.json")))
-        relocated = [(tok, slug) for tok, slug in ix["aliases"].items()]
-        # fixture check: every alias still valid, and the fixture's own renamed case (if
-        # any) is reachable through its display token's file
-        for tok, slug in relocated:
-            self.assertIn(slug, ix["files"])
-        names_by_file = {}
-        for slug in ix["files"]:
-            d = json.load(open(os.path.join(self.staging, "species", f"{slug}.json")))
-            names_by_file[slug] = {e["name"] for e in d["species"]}
-        for slug, names in names_by_file.items():
-            for n in names:
-                tok = re.sub(r"[^a-z0-9]+", "-", n.split(" ")[0].lower()).strip("-")
-                self.assertTrue(tok in names_by_file and n in names_by_file[tok],
-                                f"{n} unreachable through its display token {tok}")
+        # PR #68 review: Publicus relictus lives under its accepted genus Novus, but a
+        # genuine Publicus genus exists, so no alias is possible — the display genus's
+        # file must carry a copy or the row degrades to a plain link
+        def names(slug):
+            with open(os.path.join(self.staging, "species", f"{slug}.json")) as f:
+                return {e["name"]: e["key"] for e in json.load(f)["species"]}
+        self.assertIn("novus", self.index["files"])
+        self.assertIn("Publicus relictus", names("novus"))          # home file
+        pub = names("publicus")
+        self.assertEqual(pub.get("Publicus relictus"), "CX2")       # the relocated copy, same identity
+        self.assertEqual(pub.get("Publicus bonum"), "CX1")          # the genuine entry untouched
+        self.assertNotIn("publicus", self.index["aliases"])         # collision: no alias emitted
 
     def test_index_aliases_cover_renamed_display_tokens(self):
         # PR #65 review: a COL rename (old genus token in the name, file under the
@@ -653,7 +658,7 @@ class EnrichJoin(unittest.TestCase):
         out = os.path.join(self.tmp, "joined.csv")
         r, rows = self.run_enrich(out)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(set(rows), {"L5001", "L5003", "CX1", "L5009"})   # public species only
+        self.assertEqual(set(rows), {"L5001", "L5003", "CX1", "CX2", "L5009"})   # public species only
         row = rows["L5001"]
         self.assertEqual(row["wikidata_qid"], "Q111")
         self.assertEqual(row["wikipedia_ja"],
