@@ -413,22 +413,31 @@ def main():
             for x in built[mid]["species"]:
                 # complete cell unions (§6): group rows merge the members' whole-cell sq and
                 # eligible months; withdrawn fields (h/l/el/nm) stay empty placeholders.
-                t = sp.setdefault(x["n"], {"n": x["n"], "c": x["c"], "lk": x["lk"], "f": x["f"],
-                                          "k": x["k"], "r": 0, "m": [0] * 12, "sq": 0, "y": None,
-                                          "e": Counter(), "h": [], "l": [], "nm": 0, "i": [], "el": None})
-                for kf in ("c", "lk"):
-                    # PR #4 review: member rows merged by name that disagree on a taxon key
-                    # are homonyms — link nowhere rather than to one member's arbitrary taxon
-                    if x.get(kf) != t.get(kf): t[kf] = None
+                # PR #67 review: rows merge by name AND taxon identity — homonymous taxa
+                # (same name, different key) stay separate rows so each keeps its keys,
+                # its details linkage and its own distribution, instead of one keyless
+                # merged row that name-matches the wrong entry client-side.
+                gkey = (x["n"], x.get("c"), x.get("lk"))
+                t = sp.setdefault(gkey, {"n": x["n"], "c": x["c"], "lk": x["lk"], "f": x["f"],
+                                        "k": x["k"], "r": 0, "m": [0] * 12, "sq": 0, "y": None,
+                                        "e": Counter(), "h": [], "l": [], "nm": 0, "i": [], "el": None})
                 t["r"] += x["r"]; t["sq"] += x["sq"]; t["i"].append(mid)
                 t["m"] = [p + q for p, q in zip(t["m"], x["m"])]
                 if x["y"]: t["y"] = [min(t["y"][0], x["y"][0]), max(t["y"][1], x["y"][1])] if t["y"] else list(x["y"])
                 t["e"].update(x["e"])
         species = sorted(({**v, "e": dict(v["e"])} for v in sp.values()), key=lambda v: (-v["r"], v["n"]))
         poss = {}
+        # PR #12 review: candidate exclusion on the same identity tuple as the species
+        # map (a name-only check against tuple keys never matched, so a taxon recorded
+        # on one member could still surface as a group candidate) — plus the name, so a
+        # differently-keyed homonym of a recorded taxon stays a candidate only if its
+        # own identity was never recorded on any member
+        recorded_names = {k[0] for k in sp}
         for mid in members:
             for x in built[mid]["possible"]:
-                if x["n"] not in sp and (x["n"] not in poss or x["s"] > poss[x["n"]]["s"]): poss[x["n"]] = {**x, "i": mid}
+                ident = (x["n"], x.get("c"), x.get("lk"))
+                if ident in sp or x["n"] in recorded_names: continue
+                if x["n"] not in poss or x["s"] > poss[x["n"]]["s"]: poss[x["n"]] = {**x, "i": mid}
         possible = sorted(poss.values(), key=lambda v: (v["k"], -v["s"], v["n"]))
         bb = [min(built[m]["bbox"][0] for m in members), max(built[m]["bbox"][1] for m in members),
               min(built[m]["bbox"][2] for m in members), max(built[m]["bbox"][3] for m in members)]

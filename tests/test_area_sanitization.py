@@ -281,11 +281,14 @@ class SanitizedAreaDetail(unittest.TestCase):
                   "lat double, lon double, month int, n int)")
         c.close()
         group = json.loads(read(os.path.join(build(db, self.islands, self.refs), "g-oki-islands.json")))
-        hom = next(s for s in group["species"] if s["n"] == "Homonymus dubius")
-        self.assertIsNone(hom["lk"])                    # disagreeing keys link nowhere
-        self.assertEqual(hom["i"], ["okisle", "lilisle"])
-        sta = next(s for s in group["species"] if s["n"] == "Stabilis fixus")
-        self.assertEqual(sta["lk"], "6003")             # same key on both islands keeps it
+        # PR #67 review: homonyms stay SEPARATE rows, each keeping its key and islands
+        rows = sorted((r for r in group["species"] if r["n"] == "Homonymus dubius"), key=lambda r: r["lk"])
+        self.assertEqual([r["lk"] for r in rows], ["6001", "6002"])
+        self.assertEqual([r["i"] for r in rows], [["okisle"], ["lilisle"]])
+        self.assertTrue(all(r["r"] == 1 for r in rows))
+        sta = next(r for r in group["species"] if r["n"] == "Stabilis fixus")
+        self.assertEqual(sta["lk"], "6003")             # same key on both islands keeps merging
+        self.assertEqual(sta["i"], ["okisle", "lilisle"])
 
 
 DWCA_FULL = ("gbifID\thabitat\tassociatedTaxa\televation\tdataGeneralizations\tinformationWithheld\n"
