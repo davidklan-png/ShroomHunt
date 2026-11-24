@@ -254,7 +254,10 @@ def main():
                                          where {N['family']} is not null group by 1,2""").fetchall():
             fam_class[fam][cls] += n
     def fam_kind(fam, sp):
-        cls = sorted(fam_class[fam].items(), key=lambda kv: (-kv[1], kv[0]))[0][0] if fam_class.get(fam) else None
+        # nb rows can carry a null class (publish run 45192355587); None must not
+        # reach the sort's tiebreak — empty string sorts last, keeps ties deterministic
+        cls = sorted(fam_class[fam].items(),
+                     key=lambda kv: (-kv[1], kv[0] is None, kv[0] or ""))[0][0] if fam_class.get(fam) else None
         return kind(cls, fam, (sp or "").split(" ")[0])
 
     if "ea" in tables:
