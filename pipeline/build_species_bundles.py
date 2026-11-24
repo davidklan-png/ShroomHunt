@@ -271,10 +271,22 @@ def main(argv=None):
     files = {}
     aliases = {}   # display-name genus token -> file slug (COL renames)
     all_slugs = {slugify(g) for g in genera}   # PR #11 review: alias keys must not collide
+    # PR #68 review: a renamed entry whose display genus token IS a real genus
+    # (Boletus luridiformis var. luridiformis -> neoboletus, but boletus.json exists)
+    # cannot alias (collision), so it is ALSO served from the display genus's file —
+    # a second copy keyed by the same taxon identity, so the site finds it either way.
+    relocated = {}
+    for genus in sorted(genera):
+        home = slugify(genus)
+        for e in genera[genus]:
+            tok = slugify(e["name"].split(" ")[0])
+            if tok and tok != home and tok in all_slugs:
+                relocated.setdefault(tok, []).append(e)
     for genus in sorted(genera):
         slug = slugify(genus)
-        doc = {"schema_version": 1, "genus": genus,
-               "species": sorted(genera[genus], key=lambda e: e["name"])}
+        rows = sorted(genera[genus], key=lambda e: e["name"]) + sorted(
+            relocated.get(slug, []), key=lambda e: e["name"])
+        doc = {"schema_version": 1, "genus": genus, "species": rows}
         raw = (canonical(doc) + "\n").encode("utf-8")
         path = os.path.join(a.out, f"{slug}.json")
         if not (os.path.exists(path) and open(path, "rb").read() == raw):

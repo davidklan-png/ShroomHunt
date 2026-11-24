@@ -8,7 +8,7 @@ are exercised in one build. The staging bundle is built the way
 publish-dashboard.yml builds it: dashboard -> areas -> enrich -> species
 bundles -> snapshot -> validate.
 """
-import csv, hashlib, json, os, shutil, subprocess, sys, tempfile, unittest
+import csv, hashlib, json, os, re, shutil, subprocess, sys, tempfile, unittest
 import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -482,6 +482,26 @@ class SpeciesBundles(unittest.TestCase):
             self.edit(p, "species/summary.json", add)
             self.restamp(p)
         self.reject(dupe, "rows exceed the index's")
+
+    def test_renamed_entry_whose_display_genus_is_real_is_served_twice(self):
+        # PR #68 review: Boletus luridiformis var. luridiformis lives under neoboletus
+        # but boletus.json exists, so no alias is possible — the display genus's file
+        # must carry a copy or the row degrades to a plain link
+        ix = json.load(open(os.path.join(self.staging, "species", "index.json")))
+        relocated = [(tok, slug) for tok, slug in ix["aliases"].items()]
+        # fixture check: every alias still valid, and the fixture's own renamed case (if
+        # any) is reachable through its display token's file
+        for tok, slug in relocated:
+            self.assertIn(slug, ix["files"])
+        names_by_file = {}
+        for slug in ix["files"]:
+            d = json.load(open(os.path.join(self.staging, "species", f"{slug}.json")))
+            names_by_file[slug] = {e["name"] for e in d["species"]}
+        for slug, names in names_by_file.items():
+            for n in names:
+                tok = re.sub(r"[^a-z0-9]+", "-", n.split(" ")[0].lower()).strip("-")
+                self.assertTrue(tok in names_by_file and n in names_by_file[tok],
+                                f"{n} unreachable through its display token {tok}")
 
     def test_index_aliases_cover_renamed_display_tokens(self):
         # PR #65 review: a COL rename (old genus token in the name, file under the
