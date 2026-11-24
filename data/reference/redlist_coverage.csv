@@ -1,7 +1,11 @@
 # Red List coverage: one row per reviewed download (content digest — the file's
 # "fetched" date is excluded so re-downloads still match). Append after each
 # fresh download with: python3 pipeline/public_taxa.py data/raw/redlist/redlist_fungi_jp.json >> data/reference/redlist_coverage.csv
+# Sources, both held in the one masking input (every entry carries `list`):
+#   fungi    https://www.env.go.jp/nature/kisho/5th-rl-2025-book/05-5thredlist-fungi.pdf
+#   lichens  https://www.env.go.jp/nature/kisho/5th-rl-2025-book/04-5thredlist-lichens.pdf
 # Approved by David Klan, 2026-11-22 (taxon review sign-off, plan §7).
 sha256,names,matched,ambiguous
 571d81ace15973ab68883960779eeccb07cebeaff51367c75e19460ad0ba6348,159,154,5
 d54cec055d54e61d3282096708752bdedeb1c82a924f8aa63b3f0b164aba2b51,195,190,7
+38d270cc8f67f6dd2fdbd7ecb56472d7f30f51ae721ee1bca7eb6d0344d05562,348,331,9

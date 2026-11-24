@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Download the Ministry of the Environment 5th Red List for fungi (2025) and
-make it the masking input (TASK-020, spec §0a), replacing the 2020 GBIF
-checklist download as what data/raw/redlist/redlist_fungi_jp.json holds.
+"""Download the Ministry of the Environment 5th Red List (2025) for fungi and
+for lichens and make it the masking input (TASK-020, spec §0a; lichens:
+TASK-026, decision M1), replacing the 2020 GBIF checklist download as what
+data/raw/redlist/redlist_fungi_jp.json holds.
 
-Source PDF: https://www.env.go.jp/nature/kisho/5th-rl-2025-book/05-5thredlist-fungi.pdf
-(government publication; extracted names/categories are facts, the file is kept
-in gitignored data/raw/ like every raw download). Last-Modified sidecar skip as
-in fetch_col_mapping.py; extraction via `pdftotext -layout` (poppler-utils).
+Source PDFs (LISTS below; government publications — extracted names/categories
+are facts, the files are kept in gitignored data/raw/ like every raw download):
+  fungi    https://www.env.go.jp/nature/kisho/5th-rl-2025-book/05-5thredlist-fungi.pdf
+  lichens  https://www.env.go.jp/nature/kisho/5th-rl-2025-book/04-5thredlist-lichens.pdf
+Last-Modified sidecar skip as in fetch_col_mapping.py; extraction via
+`pdftotext -layout` (poppler-utils).
 
-Steps: download -> parse rows (category, Japanese name, scientific name(s)) ->
-data/reference/redlist_2025_parsed.csv (reviewed) -> match each scientific name:
+Steps: download -> parse rows once per list, each counted from 0001 (category,
+Japanese name, scientific name(s)) -> data/reference/redlist_2025_parsed.csv
+(reviewed; `list` names the source list) -> match each scientific name:
 the COL crosswalk first (lower(gbif_name)=name or lower(col_accepted_name)=name
 -> legacy gbif_id; >1 accepted taxon -> AMBIGUOUS), then the live GBIF backbone
 species/match (kingdom=Fungi), the returned key mapped through the crosswalk.
@@ -22,10 +26,12 @@ safer): the current download is archived as redlist_fungi_jp_2020.json
 matched (speciesKey or AMBIGUOUS) the main file is pure 2025, otherwise it is
 the UNION of both lists — an unmatched 2025 name that also appears in 2020
 keeps its 2020 key, and 2020-only names stay listed, so nothing un-masks by
-accident. The coverage manifest row is appended for review, and
-data/raw/redlist/redlist_2025_diff.md (private, gitignored) carries the
-added/removed names, unmatched reasons and the masked-distinct before/after
-(the latter needs the local pipeline DB; skipped where it is absent).
+accident. Both 2025 lists are the 2025 side of that rule; every entry carries
+`list` (fungi | lichens; a 2020-only union entry: fungi-2020). The coverage
+manifest row is appended for review, and data/raw/redlist/redlist_2025_diff.md
+(private, gitignored) carries the added/removed names, unmatched reasons and
+the masked-distinct before/after (the latter needs the local pipeline DB;
+skipped where it is absent).
 
 Usage: python3 pipeline/fetch_redlist_2025.py [--out-dir data/raw/redlist]
         [--parsed data/reference/redlist_2025_parsed.csv] [--map data/raw/col/gbif-col265.tsv.gz]
@@ -39,8 +45,6 @@ try:
 except ImportError:                                            # run as a script
     from col_xr import load_map
 
-URL = "https://www.env.go.jp/nature/kisho/5th-rl-2025-book/05-5thredlist-fungi.pdf"
-PDF = "05-5thredlist-fungi.pdf"
 MATCH_API = "https://api.gbif.org/v1/species/match"
 MAIN = "redlist_fungi_jp.json"
 OLD = "redlist_fungi_jp_2020.json"
@@ -50,23 +54,34 @@ RETRIES, BACKOFF = 4, 2.0
 # ponytail: the 4th (2020) list document carried ~1.3k names per the task brief; a
 # parse far below every previous edition means the layout changed and was misread.
 MIN_EXPECTED_ROWS = 100
+MIN_LICHEN_ROWS = 120               # 153 on the 5th lichen list (2025)
+OLD_LIST = "fungi-2020"             # list value of a 2020-only name the union retains
+# 掲載No. prefix -> (list, source PDF, minimum rows). Each list is downloaded,
+# parsed, gap-checked and sanity-checked on its own; a partial parse of either
+# blocks every write.
+LISTS = {
+    "FU": ("fungi", "https://www.env.go.jp/nature/kisho/5th-rl-2025-book/05-5thredlist-fungi.pdf",
+           MIN_EXPECTED_ROWS),
+    "LI": ("lichens", "https://www.env.go.jp/nature/kisho/5th-rl-2025-book/04-5thredlist-lichens.pdf",
+           MIN_LICHEN_ROWS),
+}
+URLS = [url for _, url, _ in LISTS.values()]
 
-ROW_RE = re.compile(r"^(FU\d{4})\s+(.+)$")
+ROW_RE = re.compile(r"^((?:FU|LI)\d{4})\s+(.+)$")
 CODE_RE = re.compile(r"[（(]([A-Za-z]+)[）)]")
 CHROME_RE = (re.compile(r"^環境省.+レッドリスト"),             # title, column header, page
              re.compile(r"^掲載No\."),                        # footer: known non-rows, not
              re.compile(r"^\d+ / \d+ ページ$"))               # "unparsed" leftovers
 
 
-def download(out_dir, force=False):
-    """The Red List PDF with a Last-Modified sidecar skip (see fetch_col_mapping.py)."""
-    os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, PDF)
+def download(url, path, force=False):
+    """One Red List PDF to `path`, with a Last-Modified sidecar skip (see fetch_col_mapping.py)."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     sidecar = path + ".last-modified"
     headers = {"User-Agent": "ShroomHunt-pipeline/1.0 (5th Red List switch)"}
     if not force and os.path.exists(path) and os.path.exists(sidecar):
         headers["If-Modified-Since"] = open(sidecar).read().strip()
-    req = urllib.request.Request(URL, headers=headers)
+    req = urllib.request.Request(url, headers=headers)
     for attempt in range(1, RETRIES + 1):
         try:
             with urllib.request.urlopen(req, timeout=120) as r:
@@ -94,7 +109,7 @@ def download(out_dir, force=False):
         except OSError as e:
             print(f"attempt {attempt}/{RETRIES} failed: {e}", file=sys.stderr)
             time.sleep(BACKOFF * attempt)
-    sys.exit(f"could not download {URL} after {RETRIES} attempts")
+    sys.exit(f"could not download {url} after {RETRIES} attempts")
 
 
 def extract_text(pdf, txt_path):
@@ -107,10 +122,12 @@ def extract_text(pdf, txt_path):
 
 
 def parse_rows(text):
-    """(entries, stats) from `pdftotext -layout` output. One entry per scientific
-    name; a row carrying several names yields several entries. stats["gaps"] lists
-    numbering jumps and stats["other"] the lines that matched no row — both must be
-    empty for stats["complete"], otherwise rows were lost and the parse is partial."""
+    """(entries, stats) from one list's `pdftotext -layout` output. One entry per
+    scientific name; a row carrying several names yields several entries; entry
+    ["list"] comes from the row's own 掲載No. prefix. stats["gaps"] lists numbering
+    jumps and stats["other"] the lines that matched no row — both must be empty
+    for stats["complete"], otherwise rows were lost and the parse is partial;
+    stats["lists"] names the list(s) the rows belong to."""
     entries, other, gaps, last = [], [], [], 0
     for ln in text.splitlines():
         s = ln.strip()
@@ -121,7 +138,8 @@ def parse_rows(text):
             if not any(c.match(s) for c in CHROME_RE):
                 other.append(s)
             continue
-        no = int(m.group(1)[2:])
+        tag = m.group(1)
+        no = int(tag[2:])
         if last and no != last + 1:
             gaps.append((last, no))
         last = no
@@ -140,36 +158,45 @@ def parse_rows(text):
         for sci in parts[2:]:
             sci = sci.strip(" ，,;；")
             if sci:
-                entries.append({"no": no, "category_ja": cat_ja, "category_code": code,
-                                "name_ja": parts[1], "scientific_name": sci})
+                entries.append({"no": no, "list": LISTS[tag[:2]][0], "category_ja": cat_ja,
+                                "category_code": code, "name_ja": parts[1], "scientific_name": sci})
     stats = {"rows": len(entries), "gaps": gaps, "other": other,
-             "complete": not gaps and not other}
+             "complete": not gaps and not other,
+             "lists": sorted({e["list"] for e in entries})}
     return entries, stats
 
 
-def sanity_check(stats, printed):
+def sanity_check(stats, printed, minimum=None, expect=None):
     """Fail closed before anything is written (PR #3 review P1): the 2020 union
     cannot protect newly listed 2025 taxa a broken parse omits, so a partial
-    list must block, not warn."""
+    list must block, not warn. minimum: the list's own floor; expect: the one
+    list the rows must belong to (the URL served the wrong PDF otherwise)."""
+    minimum = MIN_EXPECTED_ROWS if minimum is None else minimum
     if not stats["complete"]:
         sys.exit(f"layout not fully understood — numbering gaps {stats['gaps']}, "
                  f"unparsed lines {stats['other']}; refusing to write a partial list")
-    if stats["rows"] < MIN_EXPECTED_ROWS:
-        sys.exit(f"only {stats['rows']} names parsed (minimum {MIN_EXPECTED_ROWS}); "
+    if stats["rows"] < minimum:
+        sys.exit(f"only {stats['rows']} names parsed (minimum {minimum}); "
                  f"the layout may have changed; refusing to write a partial list")
+    if expect and stats["lists"] != [expect]:
+        sys.exit(f"{printed}: rows belong to list(s) {stats['lists']}, expected only "
+                 f"{expect}; refusing to write the wrong list")
     print(f"parsed {stats['rows']} scientific names from {printed}")
 
 
 def write_parsed_csv(entries, path):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
-        f.write(f"# Generated by pipeline/fetch_redlist_2025.py from the Ministry of the\n")
-        f.write(f"# Environment 5th Red List (fungi, 2025): {URL}\n")
+        f.write("# Generated by pipeline/fetch_redlist_2025.py from the Ministry of the\n")
+        f.write("# Environment 5th Red List (2025), fungi and lichens:\n")
+        for url in URLS:
+            f.write(f"#   {url}\n")
         f.write("# One row per scientific name; a Red List row listing several names\n")
-        f.write("# yields several rows. Reviewed reference input, like taxon_mask.csv.\n")
+        f.write("# yields several rows. `list` names the source list (fungi | lichens).\n")
+        f.write("# Reviewed reference input, like taxon_mask.csv.\n")
         w = csv.writer(f, lineterminator="\n")
-        w.writerow(["category_ja", "category_code", "name_ja", "scientific_name"])
-        w.writerows((e["category_ja"], e["category_code"], e["name_ja"], e["scientific_name"])
+        w.writerow(["list", "category_ja", "category_code", "name_ja", "scientific_name"])
+        w.writerows((e["list"], e["category_ja"], e["category_code"], e["name_ja"], e["scientific_name"])
                     for e in entries)
     print(f"{path}: {len(entries)} rows")
 
@@ -241,7 +268,7 @@ def match_species(names, con, live=live_match, sleep=1.0):
 
 
 def write_json(path, species, fetched=None):
-    d = {"dataset": URL, "doi": None, "fetched": fetched or time.strftime("%Y-%m-%d"),
+    d = {"dataset": URLS, "doi": None, "fetched": fetched or time.strftime("%Y-%m-%d"),
          "species": species}
     with open(path, "w", encoding="utf-8") as f:
         json.dump(d, f, ensure_ascii=False, indent=1)
@@ -279,7 +306,7 @@ def transition(pure_species, old_path, main_path):
         if o and not s.get("speciesKey"):
             s = {**s, "speciesKey": o.get("speciesKey"), "matchType": o.get("matchType")}
         union.append(s)
-    union += list(old_by_name.values())                        # 2020-only names keep masking
+    union += [{**s, "list": OLD_LIST} for s in old_by_name.values()]   # 2020-only names keep masking
     write_json(main_path, union)
     print(f"{main_path}: UNION of 2020 and 2025 ({len(union)} names; "
           f"{len(old_by_name)} 2020-only names retained) — nothing un-masks by accident")
@@ -315,14 +342,16 @@ def diff_report(main_path, pure_species, entries, out_path, db=None, decision=""
             json.load(open(old_path, encoding="utf-8"))["species"]}
            if os.path.exists(old_path) else {})
     new = {fold(s["name"]): s for s in pure_species}
-    cat = {fold(e["scientific_name"]): f'{e["category_code"]} {e["name_ja"]}' for e in entries}
+    cat = {fold(e["scientific_name"]): f'{e["list"]} {e["category_code"]} {e["name_ja"]}' for e in entries}
     added = sorted(set(new) - set(old))
     removed = sorted(set(old) - set(new))
-    unmatched = [(s["name"], s["matchType"]) for s in pure_species if not s.get("speciesKey")]
+    unmatched = [(s["name"], s["matchType"], s.get("list")) for s in pure_species if not s.get("speciesKey")]
+    lists = sorted({s.get("list") for s in pure_species})
+    by_list = ", ".join(f"{lst} {sum(1 for s in pure_species if s.get('list') == lst)}" for lst in lists)
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(f"# 2025 Red List masking switch (TASK-020) — private, gitignored; "
                 f"per-species names stay out of the repo\n\n")
-        f.write(f"2025 names {len(new)}, 2020 names {len(old)}; "
+        f.write(f"2025 names {len(new)} ({by_list}), 2020 names {len(old)}; "
                 f"added {len(added)}, removed {len(removed)}, unmatched {len(unmatched)}\n")
         if decision == "union-2020+2025":
             f.write("Main file: UNION with 2020 — the removed names below stay masked "
@@ -336,8 +365,8 @@ def diff_report(main_path, pure_species, entries, out_path, db=None, decision=""
             f.write(f"- {n} ({old[n].get('matchType')})\n")
         f.write(f"\n## Unmatched or ambiguous in 2025: {len(unmatched)} "
                 f"(masked by name only, no key)\n\n")
-        for n, mt in unmatched:
-            f.write(f"- {n} [{mt}]\n")
+        for n, mt, lst in unmatched:
+            f.write(f"- {n} [{lst} {mt}]\n")
         f.write(f"\n## Masked distinct (jp records): see below\n")
     masked = masked_before_after(old_path, main_path, db, mask, coverage, exceptions)
     if masked:
@@ -387,11 +416,14 @@ def main(argv=None):
     ap.add_argument("--force", action="store_true", help="ignore the stored Last-Modified")
     a = ap.parse_args(argv)
 
-    pdf = download(a.out_dir, a.force)
-    txt = extract_text(pdf, os.path.join(a.out_dir, PDF.replace(".pdf", ".txt")))
-    with open(txt, encoding="utf-8") as f:
-        entries, stats = parse_rows(f.read())
-    sanity_check(stats, PDF)
+    entries = []
+    for lst, url, minimum in LISTS.values():
+        pdf = os.path.join(a.out_dir, url.rsplit("/", 1)[-1])
+        txt = extract_text(download(url, pdf, a.force), pdf.replace(".pdf", ".txt"))
+        with open(txt, encoding="utf-8") as f:
+            rows, stats = parse_rows(f.read())
+        sanity_check(stats, pdf, minimum, lst)                 # both lists pass before any write
+        entries += rows
     write_parsed_csv(entries, a.parsed)
 
     import duckdb
@@ -405,10 +437,12 @@ def main(argv=None):
             names.append(e["scientific_name"])
     matched = match_species(names, con, sleep=a.sleep)
     con.close()
-    status = {e["scientific_name"].strip().lower(): e["category_code"] for e in entries}
-    pure = [{"name": n, "status": status[n.strip().lower()],
-             "speciesKey": int(k) if k and str(k).isdigit() else k, "matchType": mt}
-            for n, k, mt, _ in matched]
+    facts = {e["scientific_name"].strip().lower(): (e["category_code"], e["list"]) for e in entries}
+    pure = []
+    for n, k, mt, _ in matched:
+        status, lst = facts[n.strip().lower()]                 # a name on both lists: the later one
+        pure.append({"name": n, "status": status, "list": lst,
+                     "speciesKey": int(k) if k and str(k).isdigit() else k, "matchType": mt})
     write_json(os.path.join(a.out_dir, PURE), pure)
     print(f"{os.path.join(a.out_dir, PURE)}: {len(pure)} species")
 
