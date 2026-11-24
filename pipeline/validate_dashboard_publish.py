@@ -656,9 +656,13 @@ def _check_summary(ix, files, docs, staging, reasons):
                            f"(a COL-keyed row fires the primary link and needs no legacy fallback)")
     if shaped and rows != sorted(rows, key=lambda r: (-r[3], r[0])):
         reasons.append(f"integrity: {rel}: species is not ranked by area_count desc, name asc")
-    if shaped and is_uint(ix.get("species")) and len(rows) != ix["species"]:
-        reasons.append(f"integrity: {rel}: {len(rows)} rows != the index's "
+    # Names merge across identities (COL-lumped + unmapped legacy rows, backbone
+    # homonyms), so rows can be fewer than species — never more, never duplicated
+    if shaped and is_uint(ix.get("species")) and not (len(rows) <= ix["species"]):
+        reasons.append(f"integrity: {rel}: {len(rows)} rows exceed the index's "
                        f"{ix['species']} species")
+    if shaped and len({r[0] for r in rows}) != len(rows):
+        reasons.append(f"integrity: {rel}: duplicate display names in the summary")
 
 
 # ---------- the scan pieces -------------------------------------------------------------------

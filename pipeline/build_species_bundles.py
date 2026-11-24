@@ -295,13 +295,28 @@ def main(argv=None):
     # ranked by area count, the month-less backbone the map disclosure reads. A
     # sibling of the index, byte-stable like the genus files and covered by the
     # index's summary_sha256 instead of the species digest (a refresh stays cheap).
+    # Review follow-up (2026-11-24): the same display name can exist under two
+    # identities (a COL-lumped row plus an unmapped legacy row, or two backbone
+    # homonyms) — 65 real cases. The summary renders by name, so one row per name:
+    # areas are the UNION of the contributors' area sets, records and markers sum,
+    # and the link keys come from the largest contributor (the details row still
+    # resolves per-identity through the genus files).
+    by_name = {}
+    for e in entries.values():
+        row = by_name.setdefault(e["name"], {"areas": set(), "recs": 0, "mhlw": False,
+                                             "end": False, "best": None})
+        row["areas"] |= set(e["area_ids"] or ())
+        row["recs"] += sum(e["records_by_tier"].values())
+        row["mhlw"] = row["mhlw"] or bool(e["external"]["mhlw_url"])
+        row["end"] = row["end"] or e["external"]["endemic_hosoya2016"]
+        rank = (len(e["area_ids"]), sum(e["records_by_tier"].values()))
+        if row["best"] is None or rank > row["best"][0]:
+            row["best"] = (rank, e)
     summary = {"schema_version": 1, "snapshot": digest.hexdigest(),
                "generated": time.strftime("%Y-%m-%d"),
-               "species": sorted(([e["name"], e["key"], e["legacy_key"], len(e["area_ids"]),
-                                   sum(e["records_by_tier"].values()),
-                                   bool(e["external"]["mhlw_url"]),
-                                   e["external"]["endemic_hosoya2016"]]
-                                  for e in entries.values()),
+               "species": sorted(([name, b[1]["key"], b[1]["legacy_key"], len(r["areas"]),
+                                   r["recs"], r["mhlw"], r["end"]]
+                                  for name, r in by_name.items() for b in [r["best"]]),
                                   key=lambda r: (-r[3], r[0]))}
     sraw = (canonical(summary) + "\n").encode("utf-8")
     spath = os.path.join(a.out, "summary.json")
