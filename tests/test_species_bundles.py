@@ -300,6 +300,54 @@ class SpeciesBundles(unittest.TestCase):
         self.assertEqual(open(path, "rb").read(), before)
         self.assertEqual(os.path.getmtime(path), mtime)   # not even rewritten
 
+    # ---------- the national summary (TASK-025, item 9) ---------------------------------------
+
+    def summary(self):
+        with open(os.path.join(self.staging, "species", "summary.json")) as f:
+            return json.load(f)
+
+    def test_summary_ranked_and_shaped(self):
+        sm = self.summary()
+        self.assertEqual(set(sm), {"schema_version", "snapshot", "generated", "species"})
+        self.assertEqual(sm["schema_version"], 1)
+        self.assertEqual(sm["snapshot"], self.index["snapshot"])
+        # every fixture species occurs in exactly one area, so the ranking is by name
+        self.assertEqual([r[0] for r in sm["species"]],
+                         ["Neighborus proximus", "Prosus alter", "Prosus lautus",
+                          "Publicus bonum"])
+        self.assertEqual(sm["species"], sorted(sm["species"], key=lambda r: (-r[3], r[0])))
+        by_name = {r[0]: r for r in sm["species"]}
+        self.assertEqual(by_name["Prosus lautus"],
+                         ["Prosus lautus", None, "5001", 1, 3, True, True])
+        self.assertEqual(by_name["Publicus bonum"],
+                         ["Publicus bonum", "CX1", None, 1, 1, False, False])
+        self.assertEqual(by_name["Prosus alter"],
+                         ["Prosus alter", None, "5003", 1, 1, False, False])
+        self.assertEqual(by_name["Neighborus proximus"],
+                         ["Neighborus proximus", None, "5009", 1, 1, False, False])
+
+    def test_index_carries_matching_summary_sha256(self):
+        with open(os.path.join(self.staging, "species", "summary.json"), "rb") as f:
+            raw = f.read()
+        self.assertEqual(self.index["summary_sha256"], hashlib.sha256(raw).hexdigest())
+        # the summary is a sibling of the index: never hashed by the genus digest
+        h = hashlib.sha256()
+        for slug in sorted(self.index["files"]):
+            with open(os.path.join(self.staging, "species", f"{slug}.json"), "rb") as f:
+                h.update(f.read())
+        self.assertEqual(self.index["snapshot"], h.hexdigest())
+
+    def test_rewrite_of_unchanged_summary_is_byte_identical(self):
+        path = os.path.join(self.staging, "species", "summary.json")
+        before, mtime = open(path, "rb").read(), os.path.getmtime(path)
+        r = run_builder("build_species_bundles.py", "--db", self.db,
+                        "--out", os.path.join(self.staging, "species"),
+                        "--areas", os.path.join(self.staging, "areas"),
+                        "--enrich", self.enrich, *self.refs)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(open(path, "rb").read(), before)
+        self.assertEqual(os.path.getmtime(path), mtime)   # not even rewritten
+
     # ---------- the reject matrix (validator) --------------------------------------------------
 
     def reject(self, mutate, *needles):
@@ -378,6 +426,67 @@ class SpeciesBundles(unittest.TestCase):
             self.edit(p, "species/prosus.json",
                       lambda d: d["species"][0].update(area_ids=["nowhere"]))
         self.reject(bad_area, "not in the area index")
+
+    # ---------- the summary reject matrix (TASK-025) -------------------------------------------
+
+    def restamp(self, path):
+        """Re-point index summary_sha256 at the (tampered) summary on disk, so only
+        the targeted check can fire."""
+        with open(os.path.join(path, "species", "summary.json"), "rb") as f:
+            sha = hashlib.sha256(f.read()).hexdigest()
+        self.edit(path, "species/index.json", lambda d: d.update(summary_sha256=sha))
+
+    def test_missing_summary_rejects(self):
+        def gone(p):
+            os.remove(os.path.join(p, "species", "summary.json"))
+        self.reject(gone, "missing summary file: species/summary.json")
+
+    def test_tampered_summary_rejects(self):
+        def tamper(p):
+            with open(os.path.join(p, "species", "summary.json"), "a") as f:
+                f.write(" ")
+        self.reject(tamper, "does not match the index's summary_sha256")
+
+    def test_bad_summary_row_rejects(self):
+        def nonbool(p):
+            self.edit(p, "species/summary.json", lambda d: d["species"][0].__setitem__(5, 1))
+            self.restamp(p)
+        self.reject(nonbool, "is not a [name, col_key|null, legacy_key|null, area_count, "
+                             "record_count, mhlw, endemic] row")
+
+        def arity(p):
+            self.edit(p, "species/summary.json", lambda d: d["species"][0].pop())
+            self.restamp(p)
+        self.reject(arity, "is not a [name, col_key|null, legacy_key|null, area_count, "
+                           "record_count, mhlw, endemic] row")
+
+        def both_keys(p):
+            def set_both(d):
+                next(r for r in d["species"] if r[1] is not None).__setitem__(2, "5001")
+            self.edit(p, "species/summary.json", set_both)
+            self.restamp(p)
+        self.reject(both_keys, "carries legacy_key with col_key set")
+
+    def test_unranked_summary_rejects(self):
+        def swap(p):
+            self.edit(p, "species/summary.json",
+                      lambda d: d["species"].reverse())   # every fixture row is area_count 1
+            self.restamp(p)
+        self.reject(swap, "not ranked by area_count desc, name asc")
+
+    def test_summary_row_count_mismatch_rejects(self):
+        def drop(p):
+            self.edit(p, "species/summary.json", lambda d: d["species"].pop())
+            self.restamp(p)
+        self.reject(drop, "rows != the index's")
+
+    def test_masked_name_in_summary_rejects(self):
+        def masked(p):
+            self.edit(p, "species/summary.json",
+                      lambda d: d["species"].append(["Tricholoma fictum", None, None, 0, 0,
+                                                     False, False]))
+            self.restamp(p)
+        self.reject(masked, "protected taxon")
 
     # ---------- the workflow: enrich + species build + ship -------------------------------------
 
