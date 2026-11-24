@@ -270,6 +270,7 @@ def main(argv=None):
         genera.setdefault(genus_of[spk], []).append(e)
     files = {}
     aliases = {}   # display-name genus token -> file slug (COL renames)
+    all_slugs = {slugify(g) for g in genera}   # PR #11 review: alias keys must not collide
     for genus in sorted(genera):
         slug = slugify(genus)
         doc = {"schema_version": 1, "genus": genus,
@@ -284,9 +285,12 @@ def main(argv=None):
                        "species": len(doc["species"]), "bytes": len(raw)}
         for e in genera[genus]:
             # PR #65 review: a COL rename keeps the old genus token in the display
-            # name while the file lives under the accepted genus — alias the token
+            # name while the file lives under the accepted genus — alias the token.
+            # PR #11 review: a real genus with that slug outranks the alias (the
+            # validator rejects collisions); the renamed row then degrades to the
+            # plain link only if its name misses in that genus's file too.
             token = slugify(e["name"].split(" ")[0])
-            if token and token != slug and token not in aliases:
+            if token and token != slug and token not in aliases and token not in all_slugs:
                 aliases[token] = slug
     for name in (os.listdir(a.out) if os.path.isdir(a.out) else []):  # lost every species
         if name.endswith(".json") and name[:-5] not in files \
