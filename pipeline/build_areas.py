@@ -427,9 +427,17 @@ def main():
                 t["e"].update(x["e"])
         species = sorted(({**v, "e": dict(v["e"])} for v in sp.values()), key=lambda v: (-v["r"], v["n"]))
         poss = {}
+        # PR #12 review: candidate exclusion on the same identity tuple as the species
+        # map (a name-only check against tuple keys never matched, so a taxon recorded
+        # on one member could still surface as a group candidate) — plus the name, so a
+        # differently-keyed homonym of a recorded taxon stays a candidate only if its
+        # own identity was never recorded on any member
+        recorded_names = {k[0] for k in sp}
         for mid in members:
             for x in built[mid]["possible"]:
-                if x["n"] not in sp and (x["n"] not in poss or x["s"] > poss[x["n"]]["s"]): poss[x["n"]] = {**x, "i": mid}
+                ident = (x["n"], x.get("c"), x.get("lk"))
+                if ident in sp or x["n"] in recorded_names: continue
+                if x["n"] not in poss or x["s"] > poss[x["n"]]["s"]: poss[x["n"]] = {**x, "i": mid}
         possible = sorted(poss.values(), key=lambda v: (v["k"], -v["s"], v["n"]))
         bb = [min(built[m]["bbox"][0] for m in members), max(built[m]["bbox"][1] for m in members),
               min(built[m]["bbox"][2] for m in members), max(built[m]["bbox"][3] for m in members)]
