@@ -474,11 +474,30 @@ class SpeciesBundles(unittest.TestCase):
             self.restamp(p)
         self.reject(swap, "not ranked by area_count desc, name asc")
 
-    def test_summary_row_count_mismatch_rejects(self):
-        def drop(p):
-            self.edit(p, "species/summary.json", lambda d: d["species"].pop())
+    def test_summary_row_count_exceeding_species_rejects(self):
+        def dupe(p):
+            def add(d):
+                r = d["species"][0]
+                d["species"].append([r[0] + " twin", *r[1:]])   # pushes rows over the species count
+            self.edit(p, "species/summary.json", add)
             self.restamp(p)
-        self.reject(drop, "rows != the index's")
+        self.reject(dupe, "rows exceed the index's")
+
+    def test_summary_truncated_names_reject(self):
+        # PR #10 review: dropping rows (even all) must not pass on the count bound alone
+        def drop(p):
+            self.edit(p, "species/summary.json", lambda d: d["species"].__setitem__(slice(2), []))
+            self.restamp(p)
+        self.reject(drop, "summary names disagree with the genus files")
+
+    def test_summary_duplicate_display_names_reject(self):
+        def dup(p):
+            def add(d):
+                r = d["species"][0]
+                d["species"].append([r[0], *r[1:]])             # same name twice, count still fine
+            self.edit(p, "species/summary.json", add)
+            self.restamp(p)
+        self.reject(dup, "duplicate display names")
 
     def test_masked_name_in_summary_rejects(self):
         def masked(p):
