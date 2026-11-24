@@ -151,7 +151,11 @@ def invert_areas(areas_dir):
 def write_stable(path, raw):
     """Write only when the bytes differ, so an unchanged file is left untouched
     (byte-for-byte, mtime included) and a refresh touches only what changed."""
-    if not (os.path.exists(path) and open(path, "rb").read() == raw):
+    same = False
+    if os.path.exists(path):
+        with open(path, "rb") as fh:
+            same = fh.read() == raw
+    if not same:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as fh:
             fh.write(raw)
@@ -390,27 +394,29 @@ def main(argv=None):
         row["end"] = row["end"] or e["external"]["endemic_hosoya2016"]
         rank = (len(e["area_ids"]), sum(e["records_by_tier"].values()))
         if row["best"] is None or rank > row["best"][0]:
-            row["best"] = (rank, e)
+            row["best"] = (rank, spk, e)
     ranked = sorted(by_name.items(), key=lambda kv: (-len(kv[1]["areas"]), kv[0]))
     summary = {"schema_version": 1, "snapshot": digest.hexdigest(),
                "generated": time.strftime("%Y-%m-%d"),
-               "species": [[name, r["best"][1]["key"], r["best"][1]["legacy_key"], len(r["areas"]),
+               "species": [[name, r["best"][2]["key"], r["best"][2]["legacy_key"], len(r["areas"]),
                             r["recs"], r["mhlw"], r["end"]] for name, r in ranked]}
     sraw = (canonical(summary) + "\n").encode("utf-8")
     write_stable(os.path.join(a.out, "summary.json"), sraw)
     # TASK-027 (decision S2): the name index — one row per summary row, same order,
-    # no names repeated (they cost ~125 KiB gzip-9 on their own). 和名/family are the
-    # first contributor's, as a display name can live under two identities; genus_slug
-    # is the genus file that holds the species: the display token's own file when that
-    # is a real genus (the relocated copy, PR #68), else the file the token aliases to.
+    # no names repeated (they cost ~125 KiB gzip-9 on their own). A display name can
+    # live under two identities: 和名 and family are the first contributor's that has
+    # one, and genus_slug is the home file of the contributor whose keys the summary
+    # row carries — the one genus file that always lists that entry (a relocated
+    # copy may sit in the display token's file as well, PR #68). Never the alias map:
+    # it keeps one target per token, and a token split over two accepted genera
+    # would point half its species at a file that does not hold them.
     names_rows, syn_kept, syn_capped, syn_masked = [], 0, 0, 0
     for name, r in ranked:
-        tok = slugify(name.split(" ")[0])
         syn, capped, hid = synonyms_for(name, [e["key"] for _, e in r["all"] if e["key"]],
                                         crosswalk, gate)
         syn_kept, syn_capped, syn_masked = syn_kept + len(syn), syn_capped + capped, syn_masked + hid
         names_rows.append([next((e["name_ja"] for _, e in r["all"] if e["name_ja"]), None),
-                           tok if tok in all_slugs else aliases.get(tok) or slugify(genus_of[r["all"][0][0]]),
+                           slugify(genus_of[r["best"][1]]),
                            next((e["family"] for _, e in r["all"] if e["family"]), None), syn])
     names = {"schema_version": 1, "snapshot": digest.hexdigest(),
              "generated": summary["generated"], "species": names_rows}
