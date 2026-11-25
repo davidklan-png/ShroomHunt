@@ -798,6 +798,47 @@ class SpeciesBundles(unittest.TestCase):
         with open(os.path.join(out, "species", "index.json")) as f:
             self.assertEqual(json.load(f)["species"], 7)       # the bundles themselves: unchanged
 
+    def test_squares_count_every_record_with_a_species_key_whatever_its_rank(self):
+        # PR #16 review: the map counts a square's species from every record with a species
+        # key, whatever its rank, so an UNRANKED record of a page-bearing species places
+        # it in that square, while the bundles (which need the species rank) stay as they were
+        db = build_fixture_db(os.path.join(self.tmp, "unranked.duckdb"))
+        c = duckdb.connect(db)
+        c.execute("insert into jp (gbifID, speciesKey, species, genus, family, \"order\", taxonRank, basisOfRecord, "
+                  "class, phylum, decimalLatitude, decimalLongitude, month, year, datasetKey) values "
+                  "('77', '5001', 'Prosus lautus', 'Prosus', 'Fictaceae', 'Agaricales', 'UNRANKED', "
+                  "'HUMAN_OBSERVATION', 'Agaricomycetes', 'Basidiomycota', '26.5', '128.0', '7', '2018', 'dx')")
+        c.close()
+        out = os.path.join(tempfile.mkdtemp(prefix="sp-"), "staging")
+        r = run_builder("build_species_bundles.py", "--db", db,
+                        "--out", os.path.join(out, "species"),
+                        "--areas", os.path.join(self.staging, "areas"),
+                        "--enrich", self.enrich, "--crosswalk", self.xwalk, *self.refs)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        expected = self.squares()["species"] + [["318:1024", [2]]]
+        self.assertEqual(self.squares(out)["species"],        # keys in numeric (row, column) order
+                         sorted(expected, key=lambda kv: tuple(map(int, kv[0].split(":")))))
+        with open(os.path.join(out, "species", "index.json")) as f:
+            ix = json.load(f)
+        base = self.index                                # setUpClass read the staging index
+        self.assertEqual((ix["species"], ix["files"]), (base["species"], base["files"]),
+                         "no new entry: the record is not of species rank")
+
+    def test_squares_content_is_checked_against_the_map_and_the_summary(self):
+        # PR #16 review: an emptied or truncated file, or a square listing more species
+        # than the map counts there, must not pass on shape alone
+        def emptied(p):
+            self.restamp_squares(p, lambda d: d.__setitem__("species", []))
+        self.reject(emptied, "squares the map counts species in have no row")
+
+        def truncated(p):                                  # 313:1021 holds a species on the map
+            self.restamp_squares(p, lambda d: d["species"].pop(0))
+        self.reject(truncated, "squares the map counts species in have no row")
+
+        def inflated(p):                                   # the map counts one species in 313:1021
+            self.restamp_squares(p, lambda d: d["species"][0].__setitem__(1, [0, 2]))
+        self.reject(inflated, "species[0] lists 2 species, more than the map's 1 for 313:1021")
+
     def test_rewrite_of_unchanged_squares_is_byte_identical(self):
         path = os.path.join(self.staging, "species", "squares.json")
         before, mtime = open(path, "rb").read(), os.path.getmtime(path)

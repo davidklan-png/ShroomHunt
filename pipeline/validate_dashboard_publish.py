@@ -797,10 +797,12 @@ def _check_squares(ix, files, docs, staging, reasons):
     """species/squares.json (TASK-028): which ~10 km square holds which species. A
     sibling of the index like summary.json — required whenever species/ is, hashed by
     the index's squares_sha256 — carrying one [MeshKey, [summary row index…]] row per
-    square, keys sorted, indices ascending. No name is in the file, so the bound
-    "every index is a summary row" is the whole gate check (a masked species has no
-    summary row). Every key must also be a cell of dashboard.json's mesh when the
-    dashboard is staged: the squares are the species view of that map."""
+    square, keys in numeric (row, column) order, indices ascending. No name is in the
+    file, so the bound "every index is a summary row" is the whole gate check (a masked
+    species has no summary row). With dashboard.json staged the file must be the species
+    view of that map: every key a mesh cell, no square listing more species than the map
+    counts there, and every square the map counts species in present. Every indexed
+    species has an area in the summary."""
     rel = "species/squares.json"
     sq = _check_sibling(ix, files, docs, staging, reasons, rel, "squares_sha256", "squares",
                         "the square index (the summary's: schema_version, snapshot, generated, "
@@ -811,10 +813,10 @@ def _check_squares(ix, files, docs, staging, reasons):
     sm = docs.get("species/summary.json")
     srows = sm.get("species") if isinstance(sm, dict) else None
     dash = docs.get("dashboard.json")
-    mesh_keys = None                                  # not staged: the alignment check waits
+    mesh = None                                      # not staged: the alignment checks wait
     if isinstance(dash, dict) and isinstance(dash.get("mesh"), list):
-        mesh_keys = {mesh_key(r[0], r[1]) for r in dash["mesh"]
-                     if isinstance(r, list) and len(r) == 4 and is_num(r[0]) and is_num(r[1])}
+        mesh = {mesh_key(r[0], r[1]): r[3] for r in dash["mesh"]       # key -> species the map counts there
+                if isinstance(r, list) and len(r) == 4 and is_num(r[0]) and is_num(r[1]) and is_uint(r[3])}
     shaped = True
     for i, r in enumerate(rows):
         if not (isinstance(r, list) and len(r) == 2 and isinstance(r[0], str)
@@ -831,15 +833,34 @@ def _check_squares(ix, files, docs, staging, reasons):
         if isinstance(srows, list) and any(x >= len(srows) for x in r[1]):
             reasons.append(f"integrity: {rel}: species[{i}] indexes a row at or beyond the "
                            f"summary's {len(srows)} rows")
-        if mesh_keys is not None and r[0] not in mesh_keys:
-            reasons.append(f"integrity: {rel}: species[{i}] key {r[0]!r} is not a cell of "
-                           f"dashboard.json mesh")
+        if mesh is not None:
+            if r[0] not in mesh:
+                reasons.append(f"integrity: {rel}: species[{i}] key {r[0]!r} is not a cell of "
+                               f"dashboard.json mesh")
+            elif len(r[1]) > mesh[r[0]]:              # each listed row is backed by an identity the map counts
+                reasons.append(f"integrity: {rel}: species[{i}] lists {len(r[1])} species, more than "
+                               f"the map's {mesh[r[0]]} for {r[0]}")
     if shaped:
         keys = [r[0] for r in rows]
-        if keys != sorted(keys):
-            reasons.append(f"integrity: {rel}: species is not sorted by key")
+        numeric = lambda k: tuple(map(int, k.split(":")))  # noqa: E731  west-to-east, south-to-north
+        if all(is_mesh_key(k) for k in keys) and keys != sorted(keys, key=numeric):  # malformed keys: the shape reason fires
+            reasons.append(f"integrity: {rel}: species is not sorted by key (row, then column)")
         if len(set(keys)) != len(keys):
             reasons.append(f"integrity: {rel}: duplicate square keys")
+        # The species view of the mesh (PR #16 review): a truncated or emptied file must not
+        # pass. Every species with a square has an area, and every square the map counts
+        # species in has its row.
+        if isinstance(srows, list) and all(isinstance(r, list) and len(r) == 7 and is_uint(r[3]) for r in srows):
+            placed = {x for r in rows if isinstance(r[1], list) for x in r[1]}
+            homeless = {x for x in placed if x < len(srows) and srows[x][3] == 0}
+            if homeless:
+                reasons.append(f"integrity: {rel}: {len(homeless)} indexed species have no area "
+                               f"in the summary (first row {min(homeless)})")
+        if mesh is not None:
+            missing = sorted((k for k, n in mesh.items() if n and k not in set(keys)), key=numeric)
+            if missing:
+                reasons.append(f"integrity: {rel}: {len(missing)} squares the map counts species in "
+                               f"have no row (first {missing[0]})")
 
 
 # ---------- the scan pieces -------------------------------------------------------------------

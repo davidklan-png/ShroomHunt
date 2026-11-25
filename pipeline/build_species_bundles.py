@@ -257,9 +257,10 @@ def main(argv=None):
                                       try_cast(jp.decimalLatitude as double),
                                       try_cast(jp.decimalLongitude as double), {", ".join(sel)}
                                from jp{extra} {elig_join}
-                               where {X['sp_key']} is not null
-                                 and jp.taxonRank in ('SPECIES', 'VARIETY', 'SUBSPECIES', 'FORM')
-                                 and {X['sp_name']} like '% %'""").fetchall()
+                               where {X['sp_key']} is not null""").fetchall()
+        # The rank and "has a space" filters that make a species ENTRY moved to the loop
+        # below (PR #16 review): the map counts a square's species from every record with
+        # a species key, whatever its rank, so squares.json must too.
         east = set()
         if "ea" in tables:
             ea_cols = {r[0] for r in con.execute(
@@ -286,6 +287,8 @@ def main(argv=None):
         k = mesh_key(lat, lon) if spatially_eligible(unc, prec, iss, genz, held) else None
         if k:
             squares_of.setdefault(spk, Counter())[k] += 1
+        if rank not in SPECIES_RANKS or not name or " " not in name:
+            continue                                 # places a square, as on the map, but gets no page
         d = agg.setdefault(spk, {"colk": colk, "names": set(), "fam": set(), "order": set(),
                                  "cls": set(), "gen": set(), "legacy": set(),
                                  "tier": Counter(), "months": [0] * 12, "years": set(),
@@ -453,7 +456,7 @@ def main(argv=None):
                 placed.add(spk)
     squares = {"schema_version": 1, "snapshot": digest.hexdigest(),
                "generated": summary["generated"],
-               "species": [[k, sorted(v)] for k, v in sorted(by_square.items())]}
+               "species": [[k, sorted(v)] for k, v in sorted(by_square.items(), key=lambda kv: tuple(map(int, kv[0].split(":"))))]}
     qraw = (canonical(squares) + "\n").encode("utf-8")
     write_stable(os.path.join(a.out, "squares.json"), qraw)
     index = {"schema_version": 1, "snapshot": digest.hexdigest(),
