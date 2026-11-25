@@ -801,8 +801,7 @@ def _check_squares(ix, files, docs, staging, reasons):
     file, so the bound "every index is a summary row" is the whole gate check (a masked
     species has no summary row). With dashboard.json staged the file must be the species
     view of that map: every key a mesh cell, no square listing more species than the map
-    counts there, and every square the map counts species in present. Every indexed
-    species has an area in the summary."""
+    counts there, and every square the map counts species in present."""
     rel = "species/squares.json"
     sq = _check_sibling(ix, files, docs, staging, reasons, rel, "squares_sha256", "squares",
                         "the square index (the summary's: schema_version, snapshot, generated, "
@@ -848,14 +847,10 @@ def _check_squares(ix, files, docs, staging, reasons):
         if len(set(keys)) != len(keys):
             reasons.append(f"integrity: {rel}: duplicate square keys")
         # The species view of the mesh (PR #16 review): a truncated or emptied file must not
-        # pass. Every species with a square has an area, and every square the map counts
-        # species in has its row.
-        if isinstance(srows, list) and all(isinstance(r, list) and len(r) == 7 and is_uint(r[3]) for r in srows):
-            placed = {x for r in rows if isinstance(r[1], list) for x in r[1]}
-            homeless = {x for x in placed if x < len(srows) and srows[x][3] == 0}
-            if homeless:
-                reasons.append(f"integrity: {rel}: {len(homeless)} indexed species have no area "
-                               f"in the summary (first row {min(homeless)})")
+        # pass, so every square the map counts species in has its row. (A species with a
+        # square but no area is legitimate: a record can sit in a mesh cell that belongs to
+        # no published area. CI met 18 such rows on the first publish, so that check is not
+        # here.)
         if mesh is not None:
             missing = sorted((k for k, n in mesh.items() if n and k not in set(keys)), key=numeric)
             if missing:
