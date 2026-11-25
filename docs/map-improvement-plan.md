@@ -81,6 +81,7 @@ Natural Earth + curated public names → japan-outline.json (independent v1)
    - The species branch adds a separate lazy versioned index only after David and a taxon reviewer approve that disclosure.
    - Require an affirmative species allowlist, support from multiple independent records per species and mesh, and joint review with prior releases.
    - A separate PR specifies the exact index, tests suppressed entries and makes the index removable without disabling search by place or genus.
+   - **Amended 2026-11-25 (David, `filters-and-search-plan.md` S3):** the species index ships as `species/squares.json` (TASK-028, PR #16) for every public species under the masking gate and the map's source-precision rule, single-record pairs included. The allowlist, the several-records rule and the taxon-reviewer sign-off above no longer apply to it. The removability rule stays: the page works without the file.
 4. **Add `schema_version` now.** Land readers first and publish all occurrence files in one versioned snapshot. Keep existing URLs and the base mesh tuple.
    - If deferred, land Phase 0 UI and the static field renderer using the existing tuple and shape checks.
    - The shared mask, whole-cell assignment and legacy redaction still ship as compatible fixes.
