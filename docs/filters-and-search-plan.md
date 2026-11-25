@@ -84,3 +84,28 @@ One PR per task, tests first, Codex review on each PR. `handoff/verify.sh` defin
   - `selectArea()` stays the single selection path;
   - `#area-` / `#species-` deep links and history keep working;
   - street map, locate and the snapshot guards keep working.
+
+## 5. Addendum (2026-11-25): Japanese names and last pre-contact fixes
+
+Review of the live /ja/ page after the §3 tasks landed. All of them landed and work. Two
+gaps remain before contacting Dr Hosaka:
+
+1. **和名 coverage is 2%** (279 of 12,022 public species). Today a 和名 is only the title of
+   a Japanese Wikipedia article, so common species (ハツタケ, ツキヨタケ, ブナシメジ) and all
+   Japanese family and genus names are unsearchable. Catalogue of Life Japanese vernacular
+   names (CC BY 4.0), keyed by the COL ids the pipeline already uses, cover them. A spot check
+   through the GBIF API found 4 of 6.
+2. **The page credits Katumoto 2010 as the 和名 standard**, but no name comes from it.
+
+Polish: the inspector's 「日本全体」 panel needs the 全期間 label; the KPI tiles stack one per
+row at 375 px; the species-on-map list shrinks once the 5-entry cache evicts.
+
+| Order | Repo / task | Scope | Depends on |
+|---|---|---|---|
+| 7 | Bio_HP `handoff/TASK-018-attribution-and-polish.md` | Truthful attribution now, All-Japan label, mobile KPI grid, national species-on-map from summary.json | — |
+| 8 | ShroomHunt `handoff/TASK-029-japanese-names-col.md` | COL jpn vernaculars → species / genus / family 和名, names.json v2 | — (stop and report if COL coverage is under ~25%) |
+| 9 | Bio_HP `handoff/TASK-019-japanese-names-v2.md` | Reader accepts v1 and v2; alias / genus / family 和名 search; attribution names COL | Merge **before** TASK-029's publish |
+| 10 | Planner | Publish dashboard with names.json v2 | TASK-019 merged, David's approval |
+
+Rule: no 和名 of a masked species may appear anywhere: not as a name, an alias, or a genus
+or family label.
