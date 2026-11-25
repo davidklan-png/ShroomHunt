@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import duckdb  # noqa: E402
 
+from pipeline.geo_ja import mesh_key  # noqa: E402
 from test_public_taxa import FIX, write_coverage  # noqa: E402
 from test_public_taxa_outputs import run_builder  # noqa: E402
 from test_area_sanitization import ISLANDS_CSV  # noqa: E402
@@ -741,6 +742,165 @@ class SpeciesBundles(unittest.TestCase):
                       lambda d: d["species"][3][3].append("Novus bonum"))
             self.restamp(p, "names.json", "names_sha256")
         self.reject(dupe, "species[3] synonyms are not distinct")
+
+    # ---------- the square index (TASK-028) ------------------------------------------------------
+
+    def squares(self, staging=None):
+        with open(os.path.join(staging or self.staging, "species", "squares.json")) as f:
+            return json.load(f)
+
+    def restamp_squares(self, path, fn):
+        self.edit(path, "species/squares.json", fn)
+        self.restamp(path, "squares.json", "squares_sha256")
+
+    def test_squares_pair_each_cell_with_its_summary_rows(self):
+        sq = self.squares()
+        self.assertEqual(set(sq), {"schema_version", "snapshot", "generated", "species"})
+        self.assertEqual((sq["schema_version"], sq["snapshot"]), (1, self.index["snapshot"]))
+        self.assertEqual(sq["generated"], self.summary()["generated"])
+        # summary rows: 0 Neighborus proximus, 1 Prosus alter, 2 Prosus lautus,
+        # 3 Publicus bonum (both identities share its cell), 4 Publicus relictus
+        self.assertEqual(sq["species"], [["313:1021", [2]], ["314:1021", [4]], ["314:1022", [1]],
+                                         ["317:1022", [3]], ["322:1025", [0]]])
+        self.assertNotIn("315:1022", [k for k, _ in sq["species"]])   # the masked fixture taxa's cell
+        with open(os.path.join(self.staging, "species", "squares.json"), "rb") as f:
+            self.assertEqual(self.index["squares_sha256"], hashlib.sha256(f.read()).hexdigest())
+        # every square is a cell of the dashboard map built from the same fixture DB
+        with open(os.path.join(self.staging, "dashboard.json")) as f:
+            mesh = {mesh_key(r[0], r[1]) for r in json.load(f)["mesh"]}
+        self.assertLessEqual({k for k, _ in sq["species"]}, mesh)
+        self.assertIn("squares 5 squares / 5 pairs / 6 identities (5 of 6 on one record)",
+                      self.last_run.stdout)
+
+    def test_squares_skip_records_that_fail_precision_eligibility(self):
+        # the dashboard mesh's rule (TASK-006): a coarsened, flagged or withheld record
+        # places its species in no square, while its bundle entry and counts stay
+        db = build_fixture_db(os.path.join(self.tmp, "flagged.duckdb"))
+        c = duckdb.connect(db)
+        c.execute("alter table jp add column coordinateUncertaintyInMeters varchar")
+        c.execute("alter table jp add column issue varchar")
+        c.execute("update jp set coordinateUncertaintyInMeters = '25000' where gbifID = '4'")
+        c.execute("update jp set issue = 'PRESUMED_SWAPPED_COORDINATE' where gbifID = '55'")
+        c.execute("update jp_extra set informationWithheld = 'location obscured' "
+                  "where gbifID = '56'")
+        c.close()
+        out = os.path.join(tempfile.mkdtemp(prefix="sp-"), "staging")
+        r = run_builder("build_species_bundles.py", "--db", db,
+                        "--out", os.path.join(out, "species"),
+                        "--areas", os.path.join(self.staging, "areas"),
+                        "--enrich", self.enrich, "--crosswalk", self.xwalk, *self.refs)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        # Prosus alter (gbifID 4) and Publicus relictus (55) lose their only square; the
+        # withheld second identity of Publicus bonum (56) adds nothing, but the name
+        # stays in 317:1022 through its other identity's eligible record
+        self.assertEqual(self.squares(out)["species"],
+                         [["313:1021", [2]], ["317:1022", [3]], ["322:1025", [0]]])
+        with open(os.path.join(out, "species", "index.json")) as f:
+            self.assertEqual(json.load(f)["species"], 7)       # the bundles themselves: unchanged
+
+    def test_squares_count_every_record_with_a_species_key_whatever_its_rank(self):
+        # PR #16 review: the map counts a square's species from every record with a species
+        # key, whatever its rank, so an UNRANKED record of a page-bearing species places
+        # it in that square, while the bundles (which need the species rank) stay as they were
+        db = build_fixture_db(os.path.join(self.tmp, "unranked.duckdb"))
+        c = duckdb.connect(db)
+        c.execute("insert into jp (gbifID, speciesKey, species, genus, family, \"order\", taxonRank, basisOfRecord, "
+                  "class, phylum, decimalLatitude, decimalLongitude, month, year, datasetKey) values "
+                  "('77', '5001', 'Prosus lautus', 'Prosus', 'Fictaceae', 'Agaricales', 'UNRANKED', "
+                  "'HUMAN_OBSERVATION', 'Agaricomycetes', 'Basidiomycota', '26.5', '128.0', '7', '2018', 'dx')")
+        c.close()
+        out = os.path.join(tempfile.mkdtemp(prefix="sp-"), "staging")
+        r = run_builder("build_species_bundles.py", "--db", db,
+                        "--out", os.path.join(out, "species"),
+                        "--areas", os.path.join(self.staging, "areas"),
+                        "--enrich", self.enrich, "--crosswalk", self.xwalk, *self.refs)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        expected = self.squares()["species"] + [["318:1024", [2]]]
+        self.assertEqual(self.squares(out)["species"],        # keys in numeric (row, column) order
+                         sorted(expected, key=lambda kv: tuple(map(int, kv[0].split(":")))))
+        with open(os.path.join(out, "species", "index.json")) as f:
+            ix = json.load(f)
+        base = self.index                                # setUpClass read the staging index
+        self.assertEqual((ix["species"], ix["files"]), (base["species"], base["files"]),
+                         "no new entry: the record is not of species rank")
+
+    def test_squares_content_is_checked_against_the_map_and_the_summary(self):
+        # PR #16 review: an emptied or truncated file, or a square listing more species
+        # than the map counts there, must not pass on shape alone
+        def emptied(p):
+            self.restamp_squares(p, lambda d: d.__setitem__("species", []))
+        self.reject(emptied, "squares the map counts species in have no row")
+
+        def truncated(p):                                  # 313:1021 holds a species on the map
+            self.restamp_squares(p, lambda d: d["species"].pop(0))
+        self.reject(truncated, "squares the map counts species in have no row")
+
+        def inflated(p):                                   # the map counts one species in 313:1021
+            self.restamp_squares(p, lambda d: d["species"][0].__setitem__(1, [0, 2]))
+        self.reject(inflated, "species[0] lists 2 species, more than the map's 1 for 313:1021")
+
+    def test_rewrite_of_unchanged_squares_is_byte_identical(self):
+        path = os.path.join(self.staging, "species", "squares.json")
+        before, mtime = open(path, "rb").read(), os.path.getmtime(path)
+        r = self.rebuild()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(open(path, "rb").read(), before)
+        self.assertEqual(os.path.getmtime(path), mtime)   # not even rewritten; the sweep keeps it
+
+    def test_missing_squares_rejects(self):
+        def gone(p):
+            os.remove(os.path.join(p, "species", "squares.json"))
+        self.reject(gone, "missing squares file: species/squares.json")
+
+    def test_tampered_squares_rejects(self):
+        def tamper(p):
+            with open(os.path.join(p, "species", "squares.json"), "a") as f:
+                f.write(" ")
+        self.reject(tamper, "does not match the index's squares_sha256")
+
+    def test_squares_hash_mismatch_rejects(self):
+        def rehash(p):
+            self.edit(p, "species/index.json", lambda d: d.update(squares_sha256="0" * 64))
+        self.reject(rehash, "does not match the index's squares_sha256")
+
+    def test_squares_key_must_be_a_cell_of_the_map(self):
+        # well-formed and inside the envelope, but no dashboard mesh row reconstructs to it
+        def off_map(p):
+            self.restamp_squares(p, lambda d: d["species"].append(["400:1100", [0]]))
+        self.reject(off_map, "species[5] key '400:1100' is not a cell of dashboard.json mesh")
+
+        def malformed(p):
+            self.restamp_squares(p, lambda d: d["species"].append(["tokyo", [0]]))
+        self.reject(malformed, "key 'tokyo' is not an in-envelope MeshKey")
+
+    def test_squares_index_past_the_summary_rejects(self):
+        def beyond(p):                                    # five summary rows: 0-4
+            self.restamp_squares(p, lambda d: d["species"][0].__setitem__(1, [2, 5]))
+        self.reject(beyond, "species[0] indexes a row at or beyond the summary's 5 rows")
+
+    def test_squares_unsorted_or_duplicate_index_rejects(self):
+        def unsorted(p):
+            self.restamp_squares(p, lambda d: d["species"][3].__setitem__(1, [3, 0]))
+        self.reject(unsorted, "species[3] indices are not ascending and distinct")
+
+        def dupe(p):
+            self.restamp_squares(p, lambda d: d["species"][3].__setitem__(1, [3, 3]))
+        self.reject(dupe, "species[3] indices are not ascending and distinct")
+
+    def test_squares_unsorted_keys_and_empty_rows_reject(self):
+        def swap(p):
+            def sw(d):
+                d["species"][0], d["species"][1] = d["species"][1], d["species"][0]
+            self.restamp_squares(p, sw)
+        self.reject(swap, "species is not sorted by key")
+
+        def twice(p):
+            self.restamp_squares(p, lambda d: d["species"].append(d["species"][0]))
+        self.reject(twice, "duplicate square keys")
+
+        def empty(p):
+            self.restamp_squares(p, lambda d: d["species"][0].__setitem__(1, []))
+        self.reject(empty, "is not a [MeshKey, [summary row index…]] row with at least one index")
 
     # ---------- the workflow: enrich + species build + ship -------------------------------------
 
