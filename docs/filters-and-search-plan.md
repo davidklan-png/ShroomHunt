@@ -13,6 +13,7 @@ Follows Bio_HP PR #70 (pre-contact fixes, merged and live).
 | F3 | Colour the map by genus-only share: **not now**. | Decided |
 | S1 | **Name search, Phase 1 (Bio_HP only):** scientific-name search over every published species and genus, with map outlines. | Decided |
 | S2 | **Name search, Phase 2 (ShroomHunt + Bio_HP):** a name index adds 和名, family and synonyms. | Decided |
+| S3 | **Species by square (ShroomHunt + Bio_HP):** a named species lights up its own ~10 km squares; a tapped square lists its species. One small file, public species only, single-record pairs included. | Decided 2026-11-25 |
 
 The masking policy is unchanged. Research covers every kind of fungus. For practical reasons
 only (over-collection), species on the 5th Red List or on `taxon_mask.csv` are masked at
@@ -23,6 +24,14 @@ specific, obscure species and the search filters down to that one name, as long 
 masked. Rank wins over popularity. A masked name filters to nothing and is never confirmed
 or denied. 和名 coverage is not a blocker for S2: 278 of 12,120 public species carry one
 today.
+
+S3 (2026-11-25), after David was told that 69% of species–square pairs rest on one
+record: `species/squares.json` lists, per ~10 km square of the map, the `summary.json`
+rows recorded there. A species sits in a square only through a record that passes the
+masking gate and the map's source-precision rule; masked species have no summary row, so
+they cannot appear. No species allowlist and no taxon-reviewer sign-off: this supersedes
+`map-improvement-plan.md` §4 item 3 on those two points and on the several-records
+rule. The index stays removable: Bio_HP works without the file (TASK-017).
 
 ## 2. Problems on the live page
 
