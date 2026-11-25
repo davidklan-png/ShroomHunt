@@ -14,8 +14,14 @@ covered without joining the genus digest. species/names.json (TASK-027,
 decision S2) is the name search index: row i belongs to summary row i (the
 same order, no names repeated — they cost ~125 KiB gzip-9 on their own) and
 carries [name_ja, genus_slug, family, [synonyms…]]; the index carries its
-sha256 as names_sha256. Synonyms come from the COL crosswalk (--crosswalk,
-optional: without it every list is empty) and never name a masked taxon.
+sha256 as names_sha256. species/squares.json (TASK-028) is the map's square
+index, one [MeshKey, [summary row indices…]] row per ~10 km square, a species
+placed only through a record the dashboard mesh would count there (the shared
+source-precision eligibility, pipeline/eligibility.py); no name is in the
+file, so a masked species — it has no summary row — cannot appear. The index
+carries its sha256 as squares_sha256. Synonyms come from the COL crosswalk
+(--crosswalk, optional: without it every list is empty) and never name a
+masked taxon.
 
 Our own facts per species (spec section 1, no edibility anywhere): COL key +
 legacy key, names and classification, record count by evidence tier (all gated
@@ -48,6 +54,8 @@ import duckdb
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from public_taxa import SPECIES_RANKS, load_gate  # noqa: E402
 from col_xr import ensure, exprs, keyed, load_map  # noqa: E402
+from eligibility import precision_selection, spatially_eligible  # noqa: E402
+from geo_ja import mesh_key  # noqa: E402
 from shared import dedup_temp_jp, kind  # noqa: E402
 from snapshot import canonical  # noqa: E402
 from sources.wikidata import ACCEPTABLE, classify_licence  # noqa: E402
@@ -238,11 +246,17 @@ def main(argv=None):
         if dropped:
             print(f"species bundles: {dropped} cross-dataset duplicates dropped",
                   file=sys.stderr)
+        # TASK-028: the dashboard mesh's spatial rule (build_dashboard_data.py), read
+        # off the same records so a species sits in a square through exactly the
+        # records the map counts there
+        elig_join, sel = precision_selection(con)
         rows = con.execute(f"""select {X['sp_key']}, {X['col_key']}, {X['sp_name']},
                                       {X['family']}, {X['order']}, {X['class']}, {X['genus']},
                                       jp.taxonRank, jp.basisOfRecord, try_cast(jp.month as int),
-                                      try_cast(jp.year as int), jp.speciesKey, {elev}, {assoc}
-                               from jp{extra}
+                                      try_cast(jp.year as int), jp.speciesKey, {elev}, {assoc},
+                                      try_cast(jp.decimalLatitude as double),
+                                      try_cast(jp.decimalLongitude as double), {", ".join(sel)}
+                               from jp{extra} {elig_join}
                                where {X['sp_key']} is not null
                                  and jp.taxonRank in ('SPECIES', 'VARIETY', 'SUBSPECIES', 'FORM')
                                  and {X['sp_name']} like '% %'""").fetchall()
@@ -262,11 +276,16 @@ def main(argv=None):
     # aggregate our own facts per species identity (all gated Japan records)
     agg = {}
     masked = 0
-    for spk, colk, name, fam, order, cls, gen, rank, bor, mon, yr, skey, elev, assoc in rows:
+    squares_of = {}   # TASK-028: sp_key -> {MeshKey: eligible records}
+    for spk, colk, name, fam, order, cls, gen, rank, bor, mon, yr, skey, elev, assoc, *geo in rows:
         if not gate.is_public(species=name, species_key=skey, genus=gen, taxon_rank=rank,
                               col_key=colk):
             masked += 1
             continue
+        lat, lon, unc, prec, iss, genz, held = geo
+        k = mesh_key(lat, lon) if spatially_eligible(unc, prec, iss, genz, held) else None
+        if k:
+            squares_of.setdefault(spk, Counter())[k] += 1
         d = agg.setdefault(spk, {"colk": colk, "names": set(), "fam": set(), "order": set(),
                                  "cls": set(), "gen": set(), "legacy": set(),
                                  "tier": Counter(), "months": [0] * 12, "years": set(),
@@ -365,7 +384,7 @@ def main(argv=None):
                 aliases[token] = slug
     for name in (os.listdir(a.out) if os.path.isdir(a.out) else []):  # lost every species
         if name.endswith(".json") and name[:-5] not in files \
-                and name not in ("index.json", "summary.json", "names.json"):
+                and name not in ("index.json", "summary.json", "names.json", "squares.json"):
             os.remove(os.path.join(a.out, name))
             print(f"species: removed stale {name}")
 
@@ -422,11 +441,27 @@ def main(argv=None):
              "generated": summary["generated"], "species": names_rows}
     nraw = (canonical(names) + "\n").encode("utf-8")
     write_stable(os.path.join(a.out, "names.json"), nraw)
+    # TASK-028: which ~10 km square holds which species. One row per square, keyed by
+    # the dashboard's MeshKey and listing the summary rows recorded there through an
+    # eligible record. No name in the file: the bound "every index is a summary row"
+    # is the whole gate check, since a masked species has no summary row.
+    by_square, placed = {}, set()
+    for i, (_, r) in enumerate(ranked):
+        for spk, _ in r["all"]:
+            for k in squares_of.get(spk, ()):
+                by_square.setdefault(k, set()).add(i)
+                placed.add(spk)
+    squares = {"schema_version": 1, "snapshot": digest.hexdigest(),
+               "generated": summary["generated"],
+               "species": [[k, sorted(v)] for k, v in sorted(by_square.items())]}
+    qraw = (canonical(squares) + "\n").encode("utf-8")
+    write_stable(os.path.join(a.out, "squares.json"), qraw)
     index = {"schema_version": 1, "snapshot": digest.hexdigest(),
              "generated": time.strftime("%Y-%m-%d"), "genera": len(files),
              "species": sum(f["species"] for f in files.values()), "files": files,
              "aliases": aliases, "summary_sha256": hashlib.sha256(sraw).hexdigest(),
-             "names_sha256": hashlib.sha256(nraw).hexdigest()}
+             "names_sha256": hashlib.sha256(nraw).hexdigest(),
+             "squares_sha256": hashlib.sha256(qraw).hexdigest()}
     os.makedirs(a.out, exist_ok=True)
     with open(os.path.join(a.out, "index.json"), "w", newline="\n", encoding="utf-8") as f:
         f.write(canonical(index) + "\n")
@@ -434,12 +469,16 @@ def main(argv=None):
     n = len(entries)
     ext = lambda field: sum(1 for e in entries.values()  # noqa: E731
                             if e["external"][field])
+    backed = [recs for c in squares_of.values() for recs in c.values()]   # per identity-square
     print(f"{a.out}: {len(files)} genus files, {n} species (public), "
           f"{masked} masked records excluded, "
           f"{sum(f['bytes'] for f in files.values()):,} bytes genus files; "
           f"summary {len(summary['species'])} rows / {len(sraw):,} bytes; "
           f"names {len(names_rows)} rows / {len(nraw):,} bytes "
           f"(synonyms {syn_kept} kept, {syn_capped} capped, {syn_masked} masked); "
+          f"squares {len(by_square)} squares / {sum(len(v) for v in by_square.values())} pairs / "
+          f"{len(placed)} identities ({backed.count(1)} of {len(backed)} on one record) / "
+          f"{len(qraw):,} bytes; "
           f"photo {ext('photo')}, mhlw {ext('mhlw_url')}, endemic "
           f"{sum(1 for e in entries.values() if e['external']['endemic_hosoya2016'])}, "
           f"literature {ext('literature')}, mushroomexpert {ext('mushroomexpert_url')}, "

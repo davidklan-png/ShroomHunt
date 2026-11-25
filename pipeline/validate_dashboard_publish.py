@@ -11,8 +11,9 @@ A staging directory holding dashboard.json is the occurrence bundle
 (dashboard.json, areas/index.json, areas/<id>.json for exactly the index's
 ids, optional japan-outline.json and mesh-research.json, and — TASK-024,
 spec item 7 — species/index.json plus the species/<genus-slug>.json files
-its files map names, with species/summary.json beside the index (TASK-025)
-and species/names.json beside that (TASK-027)).
+its files map names, with species/summary.json beside the index (TASK-025),
+species/names.json beside that (TASK-027) and species/squares.json beside
+that (TASK-028: the map's squares against summary rows, no name in it)).
 Without dashboard.json, it is the geography-only
 bundle: exactly japan-outline.json. Anything else — dotfiles, scripts,
 stray JSON — rejects.
@@ -63,7 +64,11 @@ Checks:
               [name_ja|null, genus_slug, family|null, [synonyms…]] row per
               summary row in its order, genus_slug a genus file that lists the
               summary name, 和名/family agreeing with the genus files, and
-              no masked name among the synonyms;
+              no masked name among the synonyms; species/squares.json (TASK-028)
+              must sit beside it, match the index's squares_sha256 and carry one
+              [MeshKey, [summary row index…]] row per square — keys sorted and
+              in the envelope, indices unsigned, ascending, each below the
+              summary's row count — over cells of dashboard.json's mesh only;
   prose       no habitat/locality/elevation prose: withdrawn fields must be
               empty and no string may match the known prose fixture patterns;
   budget      gzip-9 size caps per file (§6 table);
@@ -74,7 +79,7 @@ import argparse, gzip, hashlib, json, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from geo_ja import (COL_MAX, COL_MIN, ROW_MAX, ROW_MIN, cell_center,  # noqa: E402
-                    mesh_cell)
+                    mesh_cell, mesh_key)
 from public_taxa import load_gate  # noqa: E402
 from snapshot import bundle_digest  # noqa: E402
 
@@ -89,7 +94,10 @@ BUDGETS = {"dashboard.json": 22, "areas/index.json": 25, "areas/okinawa-honto.js
            "species/summary.json": 200,
            # TASK-027: the name index, synonyms capped at 3 per species — 12,022 rows
            # measured 795 KiB raw / 169 KiB gzip-9 on the 2026-11 local data
-           "species/names.json": 200}                                 # gzip-9 KiB caps (§6)
+           "species/names.json": 200,
+           # TASK-028: the map's square index, summary-row indices only — 2,321 rows
+           # measured 197 KiB raw / 71 KiB gzip-9 on the 2026-11 local data
+           "species/squares.json": 150}                               # gzip-9 KiB caps (§6)
 DETAIL_BUDGET = 64
 KINDS = {"m", "l", "o"}
 AREA_KINDS = {"island", "tile", "group"}
@@ -128,9 +136,10 @@ OUTLINE_KEYS = {"schema_version", "source", "bbox", "land", "places"}
 RESEARCH_KEYS = {"schema_version", "snapshot", "slices", "genera"}
 # TASK-024 (spec item 7): the species bundle — per-genus files plus the index
 # (TASK-025 adds summary_sha256 covering the item-9 national summary, TASK-027
-# names_sha256 covering the name index, which shares the summary's key set).
+# names_sha256 covering the name index, which shares the summary's key set, TASK-028
+# squares_sha256 covering the square index, same key set).
 SPECIES_INDEX_KEYS = {"schema_version", "snapshot", "generated", "genera", "species", "files",
-                      "summary_sha256", "names_sha256", "aliases"}
+                      "summary_sha256", "names_sha256", "squares_sha256", "aliases"}
 SUMMARY_KEYS = {"schema_version", "snapshot", "generated", "species"}
 SPECIES_FILE_KEYS = {"schema_version", "genus", "species"}
 SPECIES_ENTRY_KEYS = {"key", "legacy_key", "name", "name_ja", "family", "order", "class", "kind",
@@ -575,7 +584,8 @@ def check_species(files, docs, staging, reasons, ids):
             reasons.append(f"shape: species/index.json: files key {slug!r} is not a genus slug")
     expected = {f"species/{s}.json" for s in fmap} | {"species/index.json",
                                                       "species/summary.json",
-                                                      "species/names.json"}
+                                                      "species/names.json",
+                                                      "species/squares.json"}
     for rel in files:
         if rel.startswith("species/") and rel not in expected:
             reasons.append(f"stray file: {rel} is not in the species index")
@@ -648,13 +658,14 @@ def check_species(files, docs, staging, reasons, ids):
                                f"slug {v!r}")
     _check_summary(ix, files, docs, staging, reasons, genus_names)
     _check_names(ix, files, docs, staging, reasons, facts)
+    _check_squares(ix, files, docs, staging, reasons)
 
 
 def _check_sibling(ix, files, docs, staging, reasons, rel, key, kind, shape):
-    """The checks summary.json and names.json share as siblings of the index: required
-    whenever species/ is, hashed by the index's <key>, the SUMMARY_KEYS key set,
-    schema_version 1, a day for generated, and the species index snapshot. Returns the
-    document, or None when its rows cannot be checked."""
+    """The checks summary.json, names.json and squares.json share as siblings of the
+    index: required whenever species/ is, hashed by the index's <key>, the SUMMARY_KEYS
+    key set, schema_version 1, a day for generated, and the species index snapshot.
+    Returns the document, or None when its rows cannot be checked."""
     if rel not in files:
         reasons.append(f"missing {kind} file: {rel} (required whenever species/ is present)")
         return None
@@ -782,6 +793,55 @@ def _check_names(ix, files, docs, staging, reasons, facts):
                            f"genus files' entries under the summary name")
 
 
+def _check_squares(ix, files, docs, staging, reasons):
+    """species/squares.json (TASK-028): which ~10 km square holds which species. A
+    sibling of the index like summary.json — required whenever species/ is, hashed by
+    the index's squares_sha256 — carrying one [MeshKey, [summary row index…]] row per
+    square, keys sorted, indices ascending. No name is in the file, so the bound
+    "every index is a summary row" is the whole gate check (a masked species has no
+    summary row). Every key must also be a cell of dashboard.json's mesh when the
+    dashboard is staged: the squares are the species view of that map."""
+    rel = "species/squares.json"
+    sq = _check_sibling(ix, files, docs, staging, reasons, rel, "squares_sha256", "squares",
+                        "the square index (the summary's: schema_version, snapshot, generated, "
+                        "species)")
+    if sq is None:
+        return
+    rows = sq["species"]
+    sm = docs.get("species/summary.json")
+    srows = sm.get("species") if isinstance(sm, dict) else None
+    dash = docs.get("dashboard.json")
+    mesh_keys = None                                  # not staged: the alignment check waits
+    if isinstance(dash, dict) and isinstance(dash.get("mesh"), list):
+        mesh_keys = {mesh_key(r[0], r[1]) for r in dash["mesh"]
+                     if isinstance(r, list) and len(r) == 4 and is_num(r[0]) and is_num(r[1])}
+    shaped = True
+    for i, r in enumerate(rows):
+        if not (isinstance(r, list) and len(r) == 2 and isinstance(r[0], str)
+                and isinstance(r[1], list) and r[1] and all(is_uint(x) for x in r[1])):
+            reasons.append(f"shape: {rel}: species[{i}] is not a [MeshKey, [summary row "
+                           f"index…]] row with at least one index")
+            shaped = False
+            continue
+        if not is_mesh_key(r[0]):
+            reasons.append(f"shape: {rel}: species[{i}] key {r[0]!r} is not an in-envelope "
+                           f"MeshKey 'row:col'")
+        if r[1] != sorted(set(r[1])):
+            reasons.append(f"integrity: {rel}: species[{i}] indices are not ascending and distinct")
+        if isinstance(srows, list) and any(x >= len(srows) for x in r[1]):
+            reasons.append(f"integrity: {rel}: species[{i}] indexes a row at or beyond the "
+                           f"summary's {len(srows)} rows")
+        if mesh_keys is not None and r[0] not in mesh_keys:
+            reasons.append(f"integrity: {rel}: species[{i}] key {r[0]!r} is not a cell of "
+                           f"dashboard.json mesh")
+    if shaped:
+        keys = [r[0] for r in rows]
+        if keys != sorted(keys):
+            reasons.append(f"integrity: {rel}: species is not sorted by key")
+        if len(set(keys)) != len(keys):
+            reasons.append(f"integrity: {rel}: duplicate square keys")
+
+
 # ---------- the scan pieces -------------------------------------------------------------------
 
 def iter_strings(obj):
@@ -846,6 +906,7 @@ def gate_scan(docs, gate, reasons):
             # TASK-025: summary.json rows are [name, col_key, legacy_key, ...] tuples.
             # TASK-027: names.json rows are [name_ja, genus_slug, family, [synonyms…]] —
             # every synonym must classify public on its own name.
+            # TASK-028: squares.json rows are [MeshKey, [summary row…]] — no name in them.
             for i, e in enumerate(doc.get("species", []) if isinstance(doc.get("species"), list) else []):
                 if isinstance(e, list) and len(e) == 7:
                     name, key, legacy = e[0], e[1], e[2]
@@ -923,7 +984,8 @@ def _occurrence(files, docs, staging, gate_args, reasons, require_species=False)
     allowed = {"dashboard.json", "areas/index.json", "japan-outline.json", "mesh-research.json"} \
         | {f"areas/{i}.json" for i in ids}
     if isinstance(six, dict) and isinstance(six.get("files"), dict):
-        allowed |= {"species/index.json", "species/summary.json", "species/names.json"} \
+        allowed |= {"species/index.json", "species/summary.json", "species/names.json",
+                    "species/squares.json"} \
             | {f"species/{s}.json" for s in six["files"]}
     for rel in files:
         if rel not in allowed:
